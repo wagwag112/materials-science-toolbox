@@ -1,0 +1,26 @@
+# VASP
+OUTCAR
+WAVECAR
+CHGCAR
+PROCAR
+IBZKPT
+XDATCAR
+DOSCAR
+EIGENVAL
+OSZICAR
+PCDAT
+REPORT
+
+# LAMMPS
+log.lammps
+*.dump
+*.restart
+
+# Python
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+
+# else
+*.log
+*.tar.gz
