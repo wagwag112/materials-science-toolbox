@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """
-Author: Huy Hoang
 Random Trajectory Frame Extractor
-Extract N random frames from an ASE .traj file and save them as .cif files.
+Extract N random frames from an ASE .traj file and save them as POSCAR files.
+Author: Huy Hoang
 Usage:
-    python extract_random_cif.py input.traj output_folder N
+    python extract_random_poscar.py input.traj output_folder N
 """
 
 import sys
@@ -29,8 +29,8 @@ def extract_random_frames(input_path, output_dir, n_frames):
 
     for i, idx in enumerate(indices):
         atoms = traj[idx]
-        out_file = os.path.join(output_dir, f"frame_{i:04d}.cif")
-        write(out_file, atoms)
+        out_file = os.path.join(output_dir, f"POSCAR_{i:04d}")
+        write(out_file, atoms, format="vasp")
 
     print("Status: Success")
     print(f"Source: {input_path} ({total} frames)")
@@ -38,7 +38,7 @@ def extract_random_frames(input_path, output_dir, n_frames):
 
 if __name__ == "__main__":
     if len(sys.argv) != 4:
-        print("Usage: python extract_random_cif.py input.traj output_folder N")
+        print("Usage: python extract_random_poscar.py input.traj output_folder N")
         sys.exit(1)
 
     try:
