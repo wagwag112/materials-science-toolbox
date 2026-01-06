@@ -2,6 +2,7 @@
 """
 Trajectory Frame Extractor
 Author: Huy Hoang
+This script extracts the first N frames from an ASE trajectory file and saves them to a new trajectory file.
 Usage: python extract_traj.py <input.traj> <output.traj> <n_frames>
 """
 
