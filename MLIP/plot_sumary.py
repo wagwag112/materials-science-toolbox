@@ -12,7 +12,7 @@ Description:
 Usage:
     Modify the 'datasets' list in the __main__ block to point to your 
     json files, then run:
-    python3 plot_combined.py
+    python3 plot_summary.py
 """
 
 import os
