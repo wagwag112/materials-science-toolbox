@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
 """
-Random Trajectory Frame Extractor
-Extract N random frames from an ASE .traj file and save them as POSCAR files.
 Author: Huy Hoang
+Extract N random frames from an ASE .traj file and save them as POSCAR files.
 Usage:
     python extract_random_poscar.py input.traj output_folder N
 """
