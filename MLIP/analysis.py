@@ -16,7 +16,7 @@ Description:
     - Error Analysis: Calculates uncertainties for D and Ea (Activation Energy).
 
 Usage:
-    python3 analysis_msd.py <temp1> [<temp2> ...]
+    python3 analysis.py <temp1> [<temp2> ...]
 """
 
 import sys
