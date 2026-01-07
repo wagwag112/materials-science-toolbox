@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
-Multi-format Interatomic Distance Analyzer
 Author: Huy Hoang
+Compute the shortest distance from each el1 atom to el2 atoms for multi-frame atomistic trajectories.
 Usage: python calc_interatomic_dist.py <input_file> <el1> <el2> <output.csv>
-Supported formats: .traj, .cif, .xml (VASP), POSCAR, OUTCAR, .xyz, etc.
+Supported formats: .traj, .cif, .xml, POSCAR, OUTCAR, .xyz, etc.
 """
 
 import sys
