@@ -27,7 +27,7 @@ except ImportError:
 # --- Hyperparameters ---
 TIME_STEP_FS = 2.0
 LOG_INTERVAL = 50
-CHECKPOINT_PATH = "/home/hoang0000/uma_finetune_runs/NMC_run_20251217/nmc_finetune_v2/checkpoints/final/inference_ckpt.pt"
+CHECKPOINT_PATH = "/home/yourcheckpoint.pt"
 
 def run_md_simulation(temperature_k, total_time_ps):
     """
