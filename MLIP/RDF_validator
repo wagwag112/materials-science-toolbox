@@ -134,8 +134,8 @@ class RDFValidator:
 
 if __name__ == "__main__":
     # USER CONFIGURATION: Update these paths for your local machine
-    AIMD_PATH = "/home/arsanyang01/cal/new_NMC/78/vasprun.xml"
-    MLIP_PATH = "/home/arsanyang01/cal/new_NMC/78/md_750K.traj"
+    AIMD_PATH = "/home/yourpath.xml"
+    MLIP_PATH = "/home/yourpath.traj"
 
     # Command line argument handling
     if len(sys.argv) < 3:
