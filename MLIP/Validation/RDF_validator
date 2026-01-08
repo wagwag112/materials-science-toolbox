@@ -7,6 +7,7 @@ Usage:
        to your simulation output files.
     2. Execution: python <script_name>.py <last_n_frames> <pair1> <pair2> ...
        Example: python rdf_validator.py 1000 Li-O O-O Ni-O
+        (This is typically called within a SLURM loop)
 """
 
 import numpy as np
