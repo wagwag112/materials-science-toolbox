@@ -1,5 +1,5 @@
 """
-Author: Huy Hoàng
+Author: Huy Hoang
 Description: Comparing the Radial Distribution Function (RDF) from AIMD (vasprun.xml) and MLIP simulations (.traj). It calculates 
              peak positions, peak shifts (delta r), and the structural Overlap Index.
 Usage:
