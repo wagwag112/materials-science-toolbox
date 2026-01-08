@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Author: Huy Hoàng
+Author: Huy Hoang
 Description: Enhanced FAIRChem Analyst with both Force and Energy validation. 
              Provides parity plots for total energy (eV/atom) and force components, 
              enabling comprehensive MLIP performance assessment against DFT.
