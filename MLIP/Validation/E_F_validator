@@ -1,0 +1,248 @@
+#!/usr/bin/env python3
+"""
+Author: Huy Hoàng
+Description: Enhanced FAIRChem Analyst with both Force and Energy validation. 
+             Provides parity plots for total energy (eV/atom) and force components, 
+             enabling comprehensive MLIP performance assessment against DFT.
+Usage:
+    1. Define paths in the __main__ block.
+    2. Execution: python E_F_validator.py
+"""
+
+import os
+import re
+import csv
+import glob
+import torch
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+from ase.io import read
+from ase.units import GPa
+
+# Setup for headless HPC environments
+import matplotlib
+matplotlib.use('Agg')
+
+# --- FAIRChem Imports ---
+try:
+    from fairchem.core.units.mlip_unit import load_predict_unit
+    from fairchem.core import FAIRChemCalculator
+except ImportError:
+    print("Error: FAIRChem not found. Please install fairchem-core.")
+    exit()
+
+class FAIRChemAnalyst:
+    def __init__(self, checkpoint_path, device="cuda"):
+        self.device = device if torch.cuda.is_available() else "cpu"
+        self.checkpoint_path = checkpoint_path
+        self.calc = self._load_model()
+
+    def _load_model(self):
+        """Initializes the MLIP model and ASE calculator."""
+        print(f"--> Loading model: {os.path.basename(self.checkpoint_path)}")
+        predictor = load_predict_unit(self.checkpoint_path, device=self.device)
+        return FAIRChemCalculator(predictor, task_name="omat")
+
+    def run_batch_inference(self, input_folder, output_folder):
+        """Performs energy, force, and stress calculations for all structures."""
+        supported_exts = ['.cif', '.vasp', '.poscar', '.outcar', '.xyz']
+        os.makedirs(output_folder, exist_ok=True)
+        
+        files = [f for f in os.listdir(input_folder) 
+                 if any(f.lower().endswith(ext) for ext in supported_exts) 
+                 or f.upper() in ['POSCAR', 'CONTCAR']]
+
+        print(f"--> Inference: Found {len(files)} structures in {input_folder}")
+        
+        for idx, filename in enumerate(files):
+            try:
+                path = os.path.join(input_folder, filename)
+                is_vasp = filename.upper() in ['POSCAR', 'CONTCAR'] or filename.lower().endswith(('.vasp', '.poscar', '.outcar'))
+                atoms = read(path, format='vasp' if is_vasp else None)
+                atoms.calc = self.calc
+
+                # Calculate Properties
+                energy = atoms.get_potential_energy()
+                forces = atoms.get_forces()
+                stress = atoms.get_stress() / GPa
+                
+                # Save individual results
+                base_name = os.path.splitext(filename)[0]
+                csv_path = os.path.join(output_folder, f"{base_name}_results.csv")
+                self._save_to_csv(csv_path, filename, energy, stress, forces, atoms.get_chemical_symbols(), atoms.get_positions())
+                print(f"    [{idx+1}/{len(files)}] Processed: {filename}")
+
+            except Exception as e:
+                print(f"    [ERROR] Failed processing {filename}: {e}")
+
+    def _save_to_csv(self, path, filename, energy, stress, forces, symbols, positions):
+        """Internal helper to write formatted CSV output."""
+        with open(path, 'w', newline='') as f:
+            writer = csv.writer(f)
+            writer.writerow(["# GLOBAL PROPERTIES"])
+            writer.writerow(["Filename", filename])
+            writer.writerow(["Total_Energy_eV", energy])
+            writer.writerow(["Energy_per_Atom_eV", energy/len(symbols)])
+            writer.writerow(["Num_Atoms", len(symbols)])
+            writer.writerow(["Stress_Tensor_GPa", *stress])
+            writer.writerow([])
+            writer.writerow(["Atom_Index", "Symbol", "Pos_X", "Pos_Y", "Pos_Z", "Force_X_eV_A", "Force_Y_eV_A", "Force_Z_eV_A"])
+            for i, (sym, pos, force) in enumerate(zip(symbols, positions, forces)):
+                writer.writerow([i, sym, *pos, *force])
+
+    def compare_and_plot(self, csv_folder, outcar_root):
+        """Matches MLIP results with DFT OUTCARs and generates parity diagnostics."""
+        csv_files = glob.glob(os.path.join(csv_folder, "*_results.csv"))
+        
+        # Data collectors
+        f_model_all, f_dft_all, ids_processed = [], [], []
+        e_model_all, e_dft_all = [], []
+
+        print(f"--> Validation: Matching {len(csv_files)} CSVs with OUTCARs...")
+
+        for csv_path in csv_files:
+            file_id = os.path.basename(csv_path).split('_')[0]
+            outcar_path = self._find_outcar(outcar_root, file_id)
+            
+            if not outcar_path: continue
+
+            # Extract Forces
+            f_model = self._read_model_forces(csv_path)
+            f_dft = self._read_dft_forces(outcar_path)
+            
+            # Extract Energies (Normalized per atom)
+            e_model, n_atoms = self._read_model_energy(csv_path)
+            e_dft = self._read_dft_energy(outcar_path)
+
+            if all(v is not None for v in [f_model, f_dft, e_model, e_dft]):
+                # Forces
+                n = min(len(f_model), len(f_dft))
+                f_model_all.append(f_model[:n].flatten())
+                f_dft_all.append(f_dft[:n].flatten())
+                # Energy per atom
+                e_model_all.append(e_model)
+                e_dft_all.append(e_dft / n_atoms)
+                
+                ids_processed.append(file_id)
+
+        if not f_model_all:
+            print("No valid paired data found for plotting.")
+            return
+
+        # Generate Graphics
+        self._generate_parity_plot(np.concatenate(f_dft_all), np.concatenate(f_model_all), 
+                                   ids_processed, f_dft_all, "force_validation_plot.png", "Force (eV/Å)")
+        
+        self._generate_parity_plot(np.array(e_dft_all), np.array(e_model_all), 
+                                   None, None, "energy_validation_plot.png", "Energy (eV/atom)")
+
+    def _find_outcar(self, root, file_id):
+        patterns = [os.path.join(root, f"{file_id}*", "OUTCAR"), os.path.join(root, f"{file_id}*", "*")]
+        for p in patterns:
+            matches = glob.glob(p)
+            for m in matches:
+                if os.path.basename(m).upper() == "OUTCAR": return m
+        return None
+
+    def _read_model_forces(self, path):
+        try:
+            df = pd.read_csv(path, skiprows=9) 
+            return df[["Force_X_eV_A", "Force_Y_eV_A", "Force_Z_eV_A"]].values
+        except: return None
+
+    def _read_model_energy(self, path):
+        """Returns Energy_per_Atom and Num_Atoms from CSV."""
+        try:
+            with open(path, 'r') as f:
+                lines = f.readlines()
+            e_atom = float(lines[3].split(',')[1])
+            n_atoms = int(lines[4].split(',')[1])
+            return e_atom, n_atoms
+        except: return None, None
+
+    def _read_dft_forces(self, path):
+        try:
+            with open(path, 'r') as f:
+                lines = f.readlines()
+            header = re.compile(r"POSITION\s+TOTAL-FORCE \(eV/Angst\)")
+            idx = -1
+            for i in range(len(lines)-1, -1, -1):
+                if header.search(lines[i]):
+                    idx = i; break
+            if idx == -1: return None
+            forces = []
+            for j in range(idx + 2, len(lines)):
+                line = lines[j].strip()
+                if not line or line.startswith(("-", "pos")): break
+                parts = line.split()
+                if len(parts) >= 6: forces.append([float(x) for x in parts[-3:]])
+            return np.array(forces)
+        except: return None
+
+    def _read_dft_energy(self, path):
+        """Extracts the final free energy TOTEN from OUTCAR."""
+        try:
+            with open(path, 'r') as f:
+                content = f.read()
+            energies = re.findall(r"free  energy   TOTEN\s+=\s+(-?\d+\.\d+)", content)
+            return float(energies[-1]) if energies else None
+        except: return None
+
+    def _generate_parity_plot(self, y_true, y_pred, ids, dft_list, output_name, label):
+        """Generic function to create parity density plots."""
+        rmse = np.sqrt(np.mean((y_pred - y_true)**2))
+        mae = np.mean(np.abs(y_pred - y_true))
+        
+        # Only perform active learning analysis for Force plots
+        if ids and dft_list:
+            self._print_active_learning(y_true, y_pred, ids, dft_list, mae)
+
+        plt.figure(figsize=(8, 7), dpi=300)
+        
+        # Calculate dynamic limits
+        all_vals = np.concatenate([y_true, y_pred])
+        vmin, vmax = np.min(all_vals), np.max(all_vals)
+        pad = (vmax - vmin) * 0.1
+        limit_range = [vmin - pad, vmax + pad]
+
+        hb = plt.hexbin(y_true, y_pred, gridsize=150, cmap='viridis', mincnt=1, bins='log')
+        plt.colorbar(hb, label='log10(count)')
+        plt.plot(limit_range, limit_range, 'r--', lw=1.5, label='Ideal')
+        
+        stats = f"N: {len(y_true):,}\nRMSE: {rmse:.4f}\nMAE: {mae:.4f}"
+        plt.gca().text(0.05, 0.95, stats, transform=plt.gca().text(0,0,"").axes.transAxes, 
+                        verticalalignment='top', bbox=dict(boxstyle='round', facecolor='white', alpha=0.7))
+        
+        plt.xlim(limit_range); plt.ylim(limit_range)
+        plt.xlabel(f'DFT {label}'); plt.ylabel(f'MLIP {label}')
+        plt.title(f'{label} Parity Diagnostic')
+        plt.tight_layout()
+        plt.savefig(output_name)
+        print(f"--> Plot saved: {output_name}")
+
+    def _print_active_learning(self, y_true, y_pred, ids, dft_list, mae):
+        threshold = mae * 3
+        abs_err = np.abs(y_pred - y_true)
+        outlier_counts = {}
+        cursor = 0
+        for file_id, arr in zip(ids, dft_list):
+            count = np.sum((abs_err[cursor : cursor + arr.size] > threshold))
+            if count > 0: outlier_counts[file_id] = count
+            cursor += arr.size
+        
+        sorted_outliers = sorted(outlier_counts.items(), key=lambda x: x[1], reverse=True)
+        print(f"\n{'='*30} ACTIVE LEARNING {'='*30}")
+        print(f"Top candidates for retraining (Force Outliers > {threshold:.4f} eV/Å):")
+        for fid, c in sorted_outliers[:5]: print(f" - {fid}: {c} force components")
+        print(f"{'='*77}\n")
+
+if __name__ == "__main__":
+    CHECKPOINT = "/home/yourcheckpoint.pt"
+    INPUT_DIR = "./input_structures"
+    CSV_DIR = "./mlip_results"
+    DFT_DIR = "/home/yourfolder/OUTCAR/"
+    
+    analyst = FAIRChemAnalyst(CHECKPOINT)
+    analyst.run_batch_inference(INPUT_DIR, CSV_DIR)
+    analyst.compare_and_plot(CSV_DIR, DFT_DIR)
