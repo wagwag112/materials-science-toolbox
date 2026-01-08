@@ -1,0 +1,160 @@
+"""
+Author: Huy Hoàng
+Description: Comparing the Radial Distribution Function (RDF) from AIMD (vasprun.xml) and MLIP simulations (.traj). It calculates 
+             peak positions, peak shifts (delta r), and the structural Overlap Index.
+Usage:
+    1. Update the 'AIMD_PATH' and 'MLIP_PATH' variables in the main block to point 
+       to your simulation output files.
+    2. Execution: python <script_name>.py <last_n_frames> <pair1> <pair2> ...
+       Example: python rdf_validator.py 1000 Li-O O-O Ni-O
+"""
+
+import numpy as np
+import matplotlib.pyplot as plt
+import pandas as pd
+from ase.io import read
+from ase.geometry.analysis import Analysis
+from scipy.signal import find_peaks
+from scipy.ndimage import medical_scatter # Optional: for advanced smoothing if needed
+import sys
+
+class RDFValidator:
+    def __init__(self, aimd_path, mlip_path, pairs, last_n_frames=500, r_max=6.0, n_bins=200):
+        self.aimd_path = aimd_path
+        self.mlip_path = mlip_path
+        self.pairs = pairs
+        self.last_n_frames = last_n_frames
+        self.r_max = r_max
+        self.n_bins = n_bins
+        self.results_summary = []
+
+    def _load_and_slice(self, path, file_format):
+        """Loads trajectory and slices the last N frames for equilibrium analysis."""
+        traj = read(path, index=":", format=file_format)
+        start_idx = max(0, len(traj) - self.last_n_frames)
+        return traj[start_idx:]
+
+    def _calculate_rdf(self, traj, pair):
+        """Calculates averaged RDF and correct bin centers."""
+        ana = Analysis(traj)
+        # get_rdf returns a list of RDFs per frame
+        rdf_list = ana.get_rdf(rmax=self.r_max, nbins=self.n_bins, elements=pair)
+        rdf_avg = np.mean(rdf_list, axis=0)
+        
+        # Mathematical Correction: Bin centers should be at (i + 0.5) * dr
+        dr = self.r_max / self.n_bins
+        r = (np.arange(self.n_bins) + 0.5) * dr
+        return r, rdf_avg
+
+    def _calculate_overlap_index(self, g_aimd, g_mlip):
+        """
+        Quantifies the similarity between two RDF curves.
+        Overlap Index (S) = Integral(min(g1, g2)) / Integral(g1)
+        S = 1.0 means perfect overlap.
+        """
+        numerator = np.sum(np.minimum(g_aimd, g_mlip))
+        denominator = np.sum(g_aimd)
+        return numerator / denominator if denominator != 0 else 0
+
+    def _get_main_peak(self, r, g_r):
+        """Identifies the primary peak position using height and prominence thresholds."""
+        # Smoothing can be added here if data is extremely noisy
+        peaks, _ = find_peaks(g_r, prominence=0.1*np.max(g_r), height=0.2*np.max(g_r))
+        if len(peaks) == 0:
+            return None, None
+        
+        # Select the highest peak within the found peaks
+        highest_peak_idx = peaks[np.argmax(g_r[peaks])]
+        return r[highest_peak_idx], g_r[highest_peak_idx]
+
+    def run(self, output_prefix="RDF_Validation"):
+        """Executes the analysis, generates plots, and exports data."""
+        print(f"--> Reading trajectories (Last {self.last_n_frames} frames)...")
+        traj_aimd = self._load_and_slice(self.aimd_path, "vasp-xml")
+        traj_mlip = self._load_and_slice(self.mlip_path, "traj")
+
+        n_pairs = len(self.pairs)
+        fig, axes = plt.subplots(1, n_pairs, figsize=(6*n_pairs, 5), squeeze=False)
+
+        for i, pair in enumerate(self.pairs):
+            pair_label = f"{pair[0]}-{pair[1]}"
+            print(f"--> Processing pair: {pair_label}")
+
+            r_aimd, g_aimd = self._calculate_rdf(traj_aimd, pair)
+            r_mlip, g_mlip = self._calculate_rdf(traj_mlip, pair)
+
+            # Scientific metrics
+            r_peak_aimd, g_peak_aimd = self._get_main_peak(r_aimd, g_aimd)
+            r_peak_mlip, g_peak_mlip = self._get_main_peak(r_mlip, g_mlip)
+            overlap_s = self._calculate_overlap_index(g_aimd, g_mlip)
+
+            if r_peak_aimd is None or r_peak_mlip is None:
+                print(f"WARNING: No peaks detected for {pair_label}")
+                delta_r = np.nan
+            else:
+                delta_r = r_peak_mlip - r_peak_aimd
+
+            # Data logging
+            self.results_summary.append({
+                "Pair": pair_label,
+                "AIMD_Peak_r": r_peak_aimd,
+                "MLIP_Peak_r": r_peak_mlip,
+                "Delta_r": delta_r,
+                "Overlap_Index": overlap_s
+            })
+
+            # Visualization
+            ax = axes[0, i]
+            ax.plot(r_aimd, g_aimd, 'k-', lw=2, label='AIMD', alpha=0.8)
+            ax.plot(r_mlip, g_mlip, 'r--', lw=2, label='MLIP', alpha=0.8)
+
+            if not np.isnan(delta_r):
+                ax.axvline(r_peak_aimd, color='black', linestyle=':', lw=1, alpha=0.5)
+                ax.axvline(r_peak_mlip, color='red', linestyle=':', lw=1, alpha=0.5)
+
+            # Metric Annotation
+            info_text = f"Δr: {delta_r:.3f} Å\nS: {overlap_s:.3f}"
+            ax.text(0.6, 0.85, info_text, transform=ax.transAxes, fontsize=10,
+                    verticalalignment='top', bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
+
+            ax.set_title(f"Pair: {pair_label}", fontsize=12, fontweight='bold')
+            ax.set_xlabel("Distance r (Å)")
+            ax.set_ylabel("g(r)")
+            ax.legend(loc='upper right')
+            ax.grid(True, alpha=0.2)
+
+        plt.tight_layout()
+        plt.savefig(f"{output_prefix}.png", dpi=300)
+        print(f"--> Plot saved as {output_prefix}.png")
+
+        # Export summary to CSV
+        df = pd.DataFrame(self.results_summary)
+        df.to_csv(f"{output_prefix}_Summary.csv", index=False)
+        return df
+
+if __name__ == "__main__":
+    # USER CONFIGURATION: Update these paths for your local machine
+    AIMD_PATH = "/home/arsanyang01/cal/new_NMC/78/vasprun.xml"
+    MLIP_PATH = "/home/arsanyang01/cal/new_NMC/78/md_750K.traj"
+
+    # Command line argument handling
+    if len(sys.argv) < 3:
+        print("Error: Missing arguments.")
+        print("Usage: python script.py <last_n_frames> <pair1> <pair2> ...")
+        sys.exit(1)
+
+    try:
+        n_frames = int(sys.argv[1])
+        raw_pairs = sys.argv[2:]
+        input_pairs = [tuple(p.split("-")) for p in raw_pairs]
+
+        # Initialize and Run
+        validator = RDFValidator(AIMD_PATH, MLIP_PATH, input_pairs, 
+                                 last_n_frames=n_frames, r_max=4.0, n_bins=150)
+        summary_df = validator.run(output_prefix="RDF_Analysis_Result")
+        
+        print("\n--- Analysis Summary ---")
+        print(summary_df.to_string(index=False))
+
+    except Exception as e:
+        print(f"An error occurred: {e}")
