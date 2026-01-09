@@ -150,7 +150,7 @@ if __name__ == "__main__":
 
         # Initialize and Run
         validator = RDFValidator(AIMD_PATH, MLIP_PATH, input_pairs, 
-                                 last_n_frames=n_frames, r_max=4.0, n_bins=150)
+                                 last_n_frames=n_frames, r_max=3.5, n_bins=100)
         summary_df = validator.run(output_prefix="RDF_Analysis_Result")
         
         print("\n--- Analysis Summary ---")
