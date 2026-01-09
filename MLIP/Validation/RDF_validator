@@ -16,7 +16,6 @@ import pandas as pd
 from ase.io import read
 from ase.geometry.analysis import Analysis
 from scipy.signal import find_peaks
-from scipy.ndimage import medical_scatter # Optional: for advanced smoothing if needed
 import sys
 
 class RDFValidator:
