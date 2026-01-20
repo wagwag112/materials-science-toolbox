@@ -116,7 +116,7 @@ class RDFValidator:
 
 if __name__ == "__main__":
     AIMD_PATH = "vasprun.xml" 
-    MLIP_PATH = "/home/hoang0000/uma/interface/md/dual_sse/md_750K.traj"
+    MLIP_PATH = "your.traj"
 
     if len(sys.argv) < 3:
         sys.exit("Usage: python script.py <n_frames> <pair1> ...")
