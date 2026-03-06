@@ -8,16 +8,44 @@ Usage:
     # Slice frames start:end (end = -1 means to the last frame)
     python extract_traj.py <input.traj> <output.file> <start> <end>
 
-    # If start and end are omitted, extract the last frame and write as VASP
+    # Provide input and output; extract last frame as VASP
     python extract_traj.py <input.traj> <output.vasp>
+
+    # Provide only input; script auto-generates output name and writes last frame in VASP
+    python extract_traj.py <input.traj>
 """
 import sys
 import os
 from ase.io import Trajectory, write
-from ase import Atoms
 
 
-def slice_trajectory(input_path: str, output_path: str, start: int = None, end: int = None):
+def _unique_path(path: str) -> str:
+    """
+    If path exists, append a numeric suffix before the extension to make it unique.
+    Example: POSCAR.vasp -> POSCAR_1.vasp -> POSCAR_2.vasp ...
+    """
+    base, ext = os.path.splitext(path)
+    candidate = path
+    i = 1
+    while os.path.exists(candidate):
+        candidate = f"{base}_{i}{ext}"
+        i += 1
+    return candidate
+
+
+def _auto_output_name(input_path: str) -> str:
+    """
+    Generate an output filename based on input_path:
+    <input_basename>_last.vasp
+    Ensure uniqueness to avoid overwriting existing files.
+    """
+    base = os.path.basename(input_path)
+    name, _ = os.path.splitext(base)
+    out_name = f"{name}_last.vasp"
+    return _unique_path(out_name)
+
+
+def slice_trajectory(input_path: str, output_path: str = None, start: int = None, end: int = None):
     if not os.path.exists(input_path):
         raise FileNotFoundError(f"{input_path} not found")
 
@@ -27,9 +55,12 @@ def slice_trajectory(input_path: str, output_path: str, start: int = None, end: 
     if total == 0:
         raise ValueError("Trajectory is empty")
 
-    # Mode 1: no start/end provided -> extract last frame and write as VASP
+    # Mode: no start/end provided -> extract last frame and write as VASP
     if start is None and end is None:
         last = traj[-1]  # Atoms object
+        # If no output_path provided, auto-generate one
+        if output_path is None or output_path.strip() == "":
+            output_path = _auto_output_name(input_path)
         # Force VASP format regardless of output extension
         write(output_path, last, format="vasp")
         print("Status: Success")
@@ -37,7 +68,7 @@ def slice_trajectory(input_path: str, output_path: str, start: int = None, end: 
         print(f"Action: extracted last frame -> {output_path} (VASP format)")
         return
 
-    # Mode 2: slicing with provided indices
+    # Mode: slicing with provided indices
     if start is None or end is None:
         raise ValueError("Both start and end must be provided for slicing, or omit both to extract last frame")
 
@@ -50,7 +81,10 @@ def slice_trajectory(input_path: str, output_path: str, start: int = None, end: 
     if end <= start or end > total:
         raise ValueError("end index out of range")
 
-    # traj[start:end] returns a list of Atoms objects; write will infer format from filename
+    # If output_path not provided for slicing, raise error (we require explicit output for slices)
+    if output_path is None or output_path.strip() == "":
+        raise ValueError("Output filename must be provided when slicing frames")
+
     subset = traj[start:end]
     write(output_path, subset)
     print("Status: Success")
@@ -61,19 +95,28 @@ def slice_trajectory(input_path: str, output_path: str, start: int = None, end: 
 if __name__ == "__main__":
     try:
         argc = len(sys.argv)
-        if argc not in (3, 5):
+        # Acceptable invocations:
+        # 1) python extract_traj.py <input.traj>                -> auto-generate output, extract last frame
+        # 2) python extract_traj.py <input.traj> <output>      -> extract last frame, use provided output
+        # 3) python extract_traj.py <input.traj> <output> <start> <end> -> slicing
+        if argc not in (2, 3, 5):
             print("Usage:")
-            print("  python extract_traj.py <input.traj> <output.file> <start> <end>")
-            print("  python extract_traj.py <input.traj> <output.vasp>   # extracts last frame as VASP")
+            print("  python extract_traj.py <input.traj>                     # auto-generate output, extract last frame (VASP)")
+            print("  python extract_traj.py <input.traj> <output.file>       # extract last frame (VASP if desired)")
+            print("  python extract_traj.py <input.traj> <output.file> <start> <end>  # slice frames (end=-1 means to last)")
             sys.exit(1)
 
         inp = sys.argv[1]
-        out = sys.argv[2]
 
-        if argc == 3:
-            # No indices provided -> extract last frame and write VASP
+        if argc == 2:
+            # Only input provided -> auto-generate output name and extract last frame
+            slice_trajectory(inp)
+        elif argc == 3:
+            out = sys.argv[2]
+            # Provided output but no indices -> extract last frame and write VASP
             slice_trajectory(inp, out)
         else:
+            out = sys.argv[2]
             start_idx = int(sys.argv[3])
             end_idx = int(sys.argv[4])
             slice_trajectory(inp, out, start_idx, end_idx)
