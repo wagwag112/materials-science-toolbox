@@ -3,7 +3,7 @@
 Author: Huy Hoang
 Slice an ASE trajectory by frame indices and write the result to a new trajectory file.
 Usage:
-    python slice_traj_frames.py <input.traj> <output.traj> <start> <end>
+    python extract_traj.py <input.traj> <output.traj> <start> <end>
 """
 
 import sys
