@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """
 Author: Huy Hoang
 Convert all .txt files in the current directory containing unit cell and atomic coordinates 
