@@ -1,4 +1,12 @@
 #!/usr/bin/env python3
+"""
+Author: Huy Hoang
+Select atom indices located within a given thickness from both boundaries
+of a simulation cell along a specified Cartesian axis.
+
+Usage:
+    python surface_index.py axis thickness_A
+"""
 
 import sys
 import ase.io as io
