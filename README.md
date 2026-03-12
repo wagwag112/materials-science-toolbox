@@ -15,5 +15,10 @@ automated pipelines to:
 2. Automate MLIP training and validation (especially using the UMA framework).
 3. Post-process simulation data for ionic conductivity.
 
+## Personal Upcoming Project
+1. HT-Benchmarking: Systematic evaluation of E_a, ionic conductivity, and stability across Sulfide, Halide, and Oxide SSEs using MLIPs (UMA, MACE).
+2. Explainable AI (XAI): Quantifying superionic conduction mechanisms to derive universal design principles.
+3. Targeted Design: Predicting optimized quaternary and doped structures beyond current performance limits.
+   
 ## 📂 Repository Structure
 *(Coming soon: I am currently migrating my custom high-throughput scripts here)*
