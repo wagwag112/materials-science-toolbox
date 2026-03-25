@@ -10,3 +10,6 @@
 - **ML-MD Simulations:** Applied to cathode fracture–transport coupling; contributing author in *Advanced Energy Materials* (Back Cover, 2026).
 
 - **Scientific Programming:** Python; automation-first approach with emphasis on modular, reusable, and well-documented codebases.
+
+
+This repository contains code independently developed by the author, including all core implementations, workflows, and analysis pipelines, unless explicitly credited otherwise.
