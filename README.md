@@ -1,24 +1,11 @@
-# Materials Science Toolbox
-# Computational Materials Science Toolbox
+## Core Competencies
 
-This repository contains my personal collection of tools and automated workflows for materials discovery and analysis.
+- **Machine Learning Interatomic Potentials (MLIPs):** Proficient in UMA (Meta); experienced in full workflow from dataset construction (VASP DFT), model fine-tuning, to evaluation. Developed self-written SOPs with automated pipelines.
 
-## 🚀 Key Expertise
-* **High-Throughput Screening:** Custom-built Python workflows for large-scale materials property predictions.
-* **Machine Learning Interatomic Potentials (MLIP):** Proficient in applying MLIPs for accelerated atomistic simulations.
-* **Density Functional Theory (DFT):** Extensive experience with **VASP** for ground-state and excited-state calculations.
+- **High-Throughput Computational Screening:** Independently developed topology-based Li-ion pathway analysis code, including coordination mapping and global connectivity; extensible to Na and other ion systems.
 
-## 🛠 Project Focus
-My research focuses on bridging the gap between high-fidelity DFT calculations and large-scale MD simulations using MLIPs. I specialize in developing
-automated pipelines to:
-1. Generate diverse structural datasets.
-2. Automate MLIP training and validation (especially using the UMA framework).
-3. Post-process simulation data for ionic conductivity.
+- **Thermodynamic & Electrochemical Stability Screening:** Built custom tools for $E_{\text{hull}}$ and electrochemical stability window (ESW) calculations using Materials Project data, integrated with MLIP recalculations on a unified reference frame.
 
-## Personal Upcoming Project
-1. HT-Benchmarking: Systematic evaluation of E_a, ionic conductivity, and stability across Sulfide, Halide, and Oxide SSEs using MLIPs (UMA, MACE).
-2. Explainable AI (XAI): Quantifying superionic conduction mechanisms to derive universal design principles.
-3. Targeted Design: Predicting optimized quaternary and doped structures beyond current performance limits.
-   
-## 📂 Repository Structure
-*(Coming soon: I am currently migrating my custom high-throughput scripts here)*
+- **ML-MD Simulations:** Applied to cathode fracture–transport coupling; contributing author in *Advanced Energy Materials* (Back Cover, 2026).
+
+- **Scientific Programming:** Python; automation-first approach with emphasis on modular, reusable, and well-documented codebases.
