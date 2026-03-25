@@ -1,6 +1,7 @@
 ## Core Competencies
 
 - **Machine Learning Interatomic Potentials (MLIPs):** Proficient in UMA (Meta); experienced in full workflow from dataset construction (VASP DFT), model fine-tuning, to evaluation. Developed self-written SOPs with automated pipelines.
+- **MLIP + QEq Coupled Electrochemical MD:** Integration of MLIPs with charge equilibration (QEq) schemes to enable molecular dynamics simulations under applied electrochemical potential, enabling a more realistic representation of electrode–electrolyte behavior.
 
 - **High-Throughput Computational Screening:** Independently developed topology-based Li-ion pathway analysis code, including coordination mapping and global connectivity; extensible to Na and other ion systems.
 
