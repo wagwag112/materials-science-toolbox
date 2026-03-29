@@ -7,8 +7,6 @@
 
 - **Thermodynamic & Electrochemical Stability Screening:** Built custom tools for $E_{\text{hull}}$ and electrochemical stability window (ESW) calculations using Materials Project data, integrated with MLIP recalculations on a unified reference frame.
 
-- **ML-MD Simulations:** Applied to cathode fracture–transport coupling; contributing author in *Advanced Energy Materials* (Back Cover, 2026).
-
 - **Scientific Programming:** Python; automation-first approach with emphasis on modular, reusable, and well-documented codebases.
 
 
