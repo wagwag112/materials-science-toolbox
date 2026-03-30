@@ -1,24 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
-"""
-Computational Materials Science Toolkit: Diffusion Analysis
----------------------------------------------------------
-Author: Huy Hoang
-Description: 
-    Calculates Diffusivity (D) and Activation Energy (Ea) from MD trajectories.
-    
-    Features:
-    - MSD Analysis: Time-Averaged (Smooth) & Ensemble t=0 (Raw).
-    - Robust Fitting: Auto-detection of diffusive regime.
-    - Checkpointing: Uses 'analysis_cache.json' to resume interrupted runs.
-    - Visualization: Detailed plots with Ballistic/Fitting/Poor-Statistics regions.
-    - Error Analysis: Calculates uncertainties for D and Ea (Activation Energy).
-
-Usage:
-    python3 analysis.py <temp1> [<temp2> ...]
-"""
-
 import sys
 import os
 import json  # Added for database management
@@ -183,33 +165,41 @@ def auto_find_diffusive_regime(times, msd):
     return best_start_idx, best_end_idx
 
 def robust_fit_diffusivity(times, msd, start_idx, end_idx):
-    """Performs linear regression to calculate D."""
+    """
+    Performs linear regression and calculates D with scientific Error Bars.
+    Uses Block Averaging (5 blocks) to compute Standard Error of the Mean (SEM).
+    """
     fit_time = times[start_idx:end_idx]
     fit_msd = msd[start_idx:end_idx]
     
-    if len(fit_time) < 2:
+    if len(fit_time) < 10:
         return 0.0, 0.0, 0.0, fit_time, fit_msd
 
+    # 1. Overall Linear Regression
     slope, intercept, r_value, _, _ = linregress(fit_time, fit_msd)
-    D_overall = (slope * 1e-4) / (2 * DIM) 
+    # D = slope / (2 * DIM) -> DIM=3 for total
+    D_overall = (slope * 1e-4) / 6.0 
     fit_line = slope * fit_time + intercept
     r2_overall = r_value**2
     
-    n_blocks = 4
+    # 2. Block Averaging for Scientific Error Bars (5 Blocks)
+    n_blocks = 5
     block_size = len(fit_time) // n_blocks
-    if block_size > 5:
-        D_values = []
-        for i in range(n_blocks):
-            s = i * block_size
-            e = (i + 1) * block_size
-            slope_i, _, _, _, _ = linregress(fit_time[s:e], fit_msd[s:e])
-            D_i = (slope_i * 1e-4) / (2 * DIM)
-            D_values.append(D_i)
-        D_std = np.std(D_values) 
-    else:
-        D_std = 0.0
+    D_values = []
     
-    return D_overall, D_std, r2_overall, fit_line, fit_time
+    for i in range(n_blocks):
+        s_block = i * block_size
+        e_block = (i + 1) * block_size
+        # Linear fit for each sub-segment
+        slope_i, _, _, _, _ = linregress(fit_time[s_block:e_block], fit_msd[s_block:e_block])
+        D_i = (slope_i * 1e-4) / 6.0
+        D_values.append(D_i)
+    
+    # Calculate Standard Error of the Mean (SEM)
+    # SEM = Standard Deviation / sqrt(N)
+    D_sem = np.std(D_values) / np.sqrt(n_blocks)
+    
+    return D_overall, D_sem, r2_overall, fit_line, fit_time
 
 def main():
     if len(sys.argv) < 2:
