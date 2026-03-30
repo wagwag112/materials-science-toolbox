@@ -1,3 +1,4 @@
+
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
@@ -94,7 +95,6 @@ class RDFValidator:
                 ax.plot(r_aimd, g_aimd, 'k-', lw=2, label='AIMD', alpha=0.7)
             ax.plot(r_mlip, g_mlip, 'r-', lw=2, label='MLIP', alpha=0.8)
 
-            # --- S?a l?i hi?n th? ký hi?u ? dây ---
             if g_aimd is not None:
                 info_text = f"dr: {delta_r:.3f} A\nS: {overlap_s:.3f}"
             else:
@@ -115,8 +115,8 @@ class RDFValidator:
         print(f"--> Done! Check {output_prefix}.png and .csv")
 
 if __name__ == "__main__":
-    AIMD_PATH = "vasprun.xml" 
-    MLIP_PATH = "your.traj"
+    AIMD_PATH = "/home/hoang0000/uma/NMC_new/train/vasprun.xml" 
+    MLIP_PATH = "/home/hoang0000/uma/NMC_new/train/RDF.traj"
 
     if len(sys.argv) < 3:
         sys.exit("Usage: python script.py <n_frames> <pair1> ...")
