@@ -1,4 +1,3 @@
-
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
@@ -6,7 +5,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import pandas as pd
 from ase.io import read
-from ase.geometry.analysis import Analysis
+from ase.geometry.rdf import get_rdf
 from scipy.signal import find_peaks
 import sys
 import os
@@ -41,12 +40,17 @@ class RDFValidator:
 
     def _calculate_rdf(self, traj, pair):
         if traj is None: return None, None
-        ana = Analysis(traj)
-        rdf_list = ana.get_rdf(rmax=self.r_max, nbins=self.n_bins, elements=pair)
-        rdf_avg = np.mean(rdf_list, axis=0)
-        dr = self.r_max / self.n_bins
-        r = (np.arange(self.n_bins) + 0.5) * dr
-        return r, rdf_avg
+        
+        all_rdfs = []
+        r_bins = None
+        
+        # get_rdf in modern ASE works on individual atoms objects
+        for atoms in traj:
+            rdf_values, r_bins = get_rdf(atoms, rmax=self.r_max, nbins=self.n_bins, elements=pair)
+            all_rdfs.append(rdf_values)
+            
+        rdf_avg = np.mean(all_rdfs, axis=0)
+        return r_bins, rdf_avg
 
     def _get_main_peak(self, r, g_r):
         if g_r is None: return None, None
@@ -116,7 +120,7 @@ class RDFValidator:
 
 if __name__ == "__main__":
     AIMD_PATH = "/home/hoang0000/uma/NMC_new/train/vasprun.xml" 
-    MLIP_PATH = "/home/hoang0000/uma/NMC_new/train/RDF.traj"
+    MLIP_PATH = "/home/hoang0000/uma/NMC_new/train/test.traj"
 
     if len(sys.argv) < 3:
         sys.exit("Usage: python script.py <n_frames> <pair1> ...")
