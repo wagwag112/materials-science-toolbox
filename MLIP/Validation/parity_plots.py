@@ -13,22 +13,25 @@ from fairchem.core import FAIRChemCalculator
 
 import glob
 import os
+import random
 
-# ?? NEW: KDE
 from scipy.stats import gaussian_kde
 
 
 # ======================
 # PATHS
 # ======================
-OUTCAR_DIR = "/home/hoang0000/uma/NMC_new/train/OUTCAR"
-outcar_files = glob.glob(os.path.join(OUTCAR_DIR, "**/OUTCAR"), recursive=True)
+OUTCAR_DIR = "/home/hoang0000/uma/NMC_new/train/test_folders"
+outcar_files = glob.glob(os.path.join(OUTCAR_DIR, "**/vasprun.xml"), recursive=True)
 
 #CHECKPOINT_PATH = "/home/hoang0000/inference_ckpt.pt"
-CHECKPOINT_PATH = "/home/hoang0000/uma-s-1p2.pt"
+#CHECKPOINT_PATH = "/home/hoang0000/uma-s-1p2.pt"
+CHECKPOINT_PATH = "/home/hoang0000/uma_finetune/v2/202604-0514-5257-19ea/checkpoints/final/inference_ckpt.pt"
 
 OUTPUT_FORCE = "force_parity.png"
 OUTPUT_ENERGY = "energy_parity.png"
+
+N_FRAMES_PER_FILE = 100  # number of random frames to sample per file
 
 
 # ======================
@@ -46,7 +49,6 @@ print("Loading ML model...")
 
 predictor = load_predict_unit(CHECKPOINT_PATH, device=DEVICE)
 calc = FAIRChemCalculator(predictor, task_name="omat")
-
 print("Model loaded")
 
 
@@ -71,16 +73,19 @@ for path in outcar_files:
     print(f"Reading: {path}")
 
     try:
-        frames = read(path, format="vasp-out", index=":")
+        frames = read(path, format="vasp-xml", index=":")
     except Exception as e:
-        print("ASE read failed, fallback:", e)
-        try:
-            frames = read(path, index=":")
-        except Exception as e2:
-            print(f"Skip file {path}: {e2}")
-            continue
+        print(f"Skip file {path}: {e}")
+        continue
 
     print(f"Total frames: {len(frames)}")
+
+    # ======================
+    # RANDOM FRAME SAMPLING
+    # ======================
+    n_sample = min(N_FRAMES_PER_FILE, len(frames))
+    frames = random.sample(frames, n_sample)
+    print(f"Sampled frames: {len(frames)}")
 
     # ======================
     # FILTER VALID FRAMES
@@ -141,10 +146,11 @@ e_pred = np.array(ml_energy)
 
 
 # ======================
-# CENTER ENERGY (optional but good)
+# CENTER ENERGY (shift both by same DFT mean)
 # ======================
-e_true = e_true - np.mean(e_true)
-e_pred = e_pred - np.mean(e_pred)
+offset = np.mean(e_true)
+e_true = e_true - offset
+e_pred = e_pred - offset
 
 
 # ======================
@@ -157,20 +163,33 @@ mae_e = np.mean(np.abs(e_true - e_pred))
 rmse_e = np.sqrt(np.mean((e_true - e_pred) ** 2))
 
 print("\n===== FORCE RESULTS =====")
-print(f"MAE  = {mae_f:.6f} eV/A")
-print(f"RMSE = {rmse_f:.6f} eV/A")
+print(f"MAE  = {mae_f:.4f} eV/A")
+print(f"RMSE = {rmse_f:.4f} eV/A")
 print(f"N    = {len(y_true)}")
 
 print("\n===== ENERGY RESULTS =====")
-print(f"MAE  = {mae_e:.4f} meV/atom")
-print(f"RMSE = {rmse_e:.4f} meV/atom")
+print(f"MAE  = {mae_e:.1f} meV/atom")
+print(f"RMSE = {rmse_e:.1f} meV/atom")
 print(f"N    = {len(e_true)}")
+
+
+# ======================
+# FONT SIZE
+# ======================
+plt.rcParams.update({
+    "font.size": 16,
+    "axes.titlesize": 16,
+    "axes.labelsize": 16,
+    "xtick.labelsize": 14,
+    "ytick.labelsize": 14,
+    "legend.fontsize": 14,
+})
 
 
 # ======================
 # FORCE PARITY (HEXBIN)
 # ======================
-plt.figure(figsize=(8, 8), dpi=300)
+plt.figure(figsize=(8, 8), dpi=450)
 
 limit = max(np.max(np.abs(y_true)), np.max(np.abs(y_pred))) * 1.05
 
@@ -199,7 +218,8 @@ plt.text(
     f"MAE = {mae_f:.4f}\nRMSE = {rmse_f:.4f}\nPoints = {len(y_true)}",
     transform=plt.gca().transAxes,
     bbox=dict(facecolor="white", alpha=0.6),
-    verticalalignment="top"
+    verticalalignment="top",
+    fontsize=14,
 )
 
 plt.tight_layout()
@@ -212,7 +232,7 @@ print(f"Saved plot: {OUTPUT_FORCE}")
 # ======================
 # ENERGY PARITY (KDE SCATTER)
 # ======================
-plt.figure(figsize=(8, 8), dpi=300)
+plt.figure(figsize=(8, 8), dpi=450)
 
 # zoom robust
 low = np.percentile(e_true, 1)
@@ -244,10 +264,11 @@ plt.title("Energy parity: DFT vs MLIP")
 plt.text(
     0.05,
     0.95,
-    f"MAE = {mae_e:.4f} eV/atom\nRMSE = {rmse_e:.4f} eV/atom\nPoints = {len(e_true)}",
+    f"MAE = {mae_e:.1f} meV/atom\nRMSE = {rmse_e:.1f} meV/atom\nPoints = {len(e_true)}",
     transform=plt.gca().transAxes,
     bbox=dict(facecolor="white", alpha=0.6),
-    verticalalignment="top"
+    verticalalignment="top",
+    fontsize=14,
 )
 
 plt.tight_layout()
