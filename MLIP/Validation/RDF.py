@@ -14,6 +14,17 @@ import matplotlib
 # Force non-interactive backend
 matplotlib.use('Agg')
 
+# === ADD THIS BLOCK ONLY (increase font sizes globally) ===
+plt.rcParams.update({
+    "font.size": 14,
+    "axes.titlesize": 14,
+    "axes.labelsize": 14,
+    "legend.fontsize": 12,
+    "xtick.labelsize": 12,
+    "ytick.labelsize": 12
+})
+# =========================================================
+
 class RDFValidator:
     def __init__(self, aimd_path, mlip_path, pairs, last_n_frames=500, r_max=6.0, n_bins=200):
         self.aimd_path = aimd_path
@@ -84,7 +95,7 @@ class RDFValidator:
             if g_aimd is not None and g_mlip is not None:
                 overlap_s = np.sum(np.minimum(g_aimd, g_mlip)) / np.sum(g_aimd)
             
-            delta_r = (r_p_mlip - r_p_aimd) if (r_p_aimd and r_p_mlip) else np.nan
+            delta_r = (r_p_mlip - r_p_aimd) if (r_p_aimd is not None and r_p_mlip is not None) else np.nan
 
             self.results_summary.append({
                 "Pair": pair_label,
@@ -104,8 +115,9 @@ class RDFValidator:
             else:
                 info_text = "MLIP Only"
             
-            ax.text(0.55, 0.85, info_text, transform=ax.transAxes, fontsize=10,
-                    verticalalignment='top', bbox=dict(boxstyle='round', facecolor='white', alpha=0.7))
+            ax.text(0.55, 0.85, info_text, transform=ax.transAxes,
+                    verticalalignment='top',
+                    bbox=dict(boxstyle='round', facecolor='white', alpha=0.7))
 
             ax.set_title(f"Pair: {pair_label}")
             ax.set_xlabel("Distance r (Angstrom)")
@@ -114,7 +126,7 @@ class RDFValidator:
             ax.grid(True, alpha=0.2)
 
         plt.tight_layout()
-        plt.savefig(f"{output_prefix}.png", dpi=300)
+        plt.savefig(f"{output_prefix}.png", dpi=450)
         pd.DataFrame(self.results_summary).to_csv(f"{output_prefix}.csv", index=False)
         print(f"--> Done! Check {output_prefix}.png and .csv")
 
