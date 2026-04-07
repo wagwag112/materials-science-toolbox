@@ -1,136 +1,124 @@
-"""
-Author: Huy Hoang
-Calculate smoothed atomic density and concentration profiles from an ASE trajectory using Gaussian Smearing. 
-Generates visualization for global chemical composition and individual species distribution along 
-the chosen axis (X, Y, or Z).
-
-Usage:
-    # Analyze density and concentration for Li, S, and Cl from frame 0 to 1000
-    python concentration_profile.py interface.traj 0 1000 Li S Cl
-"""
-
 import sys
 import os
+import json
+import re
 import matplotlib
-matplotlib.use('Agg') # Necessary for HPC
+matplotlib.use('Agg')
 import numpy as np
 import matplotlib.pyplot as plt
-import matplotlib.ticker as ticker # Added for tick control
+import matplotlib.ticker as ticker
 from ase.io import read
 from scipy.ndimage import gaussian_filter1d
 
-def compute_smoothed_profile(atoms_list, symbols, axis=0, sigma=0.1, res=0.1):
-    """
-    Calculate smoothed density using Gaussian Smearing.
-    """
+# --- CONFIGURATION ---
+AXIS = 2              # 0:X, 1:Y, 2:Z
+SIGMA = 0.4           # Gaussian smoothing width
+RESOLUTION = 0.1      # Grid spacing (Angstrom)
+JSON_NAME = "interface_database.json"
+
+def compute_smoothed_profile(atoms_list, symbols, axis=2, sigma=0.4, res=0.1):
+    """Calculates number density (atoms/A^3) using Gaussian smearing."""
     first_atoms = atoms_list[0]
     lx = np.linalg.norm(first_atoms.get_cell()[axis])
     vol = first_atoms.get_volume()
     area = vol / lx
-    
     grid = np.arange(0, lx, res)
     densities = {s: np.zeros_like(grid) for s in symbols}
     
-    print(f"  [LOG] Processing {len(atoms_list)} frames along axis {axis}...")
-
     for atoms in atoms_list:
         syms = np.array(atoms.get_chemical_symbols())
         positions = atoms.get_positions()
-        
         for s in symbols:
             coords = positions[syms == s][:, axis]
             if len(coords) == 0: continue
-            
             counts, _ = np.histogram(coords, bins=np.append(grid, lx))
-            sigma_px = sigma / res
-            smoothed = gaussian_filter1d(counts.astype(float), sigma_px, mode='wrap')
+            smoothed = gaussian_filter1d(counts.astype(float), sigma/res, mode='nearest')
             densities[s] += (smoothed / (res * area))
             
     for s in symbols:
         densities[s] /= len(atoms_list)
-        
     return grid, densities
 
+def get_percentage(dens_dict):
+    """Converts a dictionary of number densities to atomic percentages."""
+    all_elements = list(dens_dict.keys())
+    dens_matrix = np.array([dens_dict[s] for s in all_elements])
+    total_dens = np.sum(dens_matrix, axis=0) + 1e-10
+    return {s: (np.array(dens_dict[s])/total_dens)*100 for s in all_elements}
+
 def main():
-    # ==============================================================
-    # --- CONFIGURATION SECTION ---
-    PROJECTION_AXIS = 2      # 0 for X, 1 for Y, 2 for Z
-    X_TICK_STEP = 5.0 
-    MINOR_TICKS_PER_MAJOR = 5
-    # ==============================================================
-    
-    axis_name = {0: 'X', 1: 'Y', 2: 'Z'}[PROJECTION_AXIS]
-
-    if len(sys.argv) < 5:
-        print("Usage: python3 script.py <traj_file> <start> <end> <elem1> <elem2> ...")
+    if len(sys.argv) < 4:
+        print("Usage: python script1.py <traj_file> <start> <end> [ref_elem1 ref_elem2 ...]")
         sys.exit(1)
 
-    t_file = sys.argv[1]
-    s_idx = int(sys.argv[2])
-    e_idx = int(sys.argv[3])
-    target_elements = sys.argv[4:]
+    traj_path = sys.argv[1]
+    s_idx, e_idx = int(sys.argv[2]), int(sys.argv[3])
+    ref_elements = sys.argv[4:] # Elements to show dashed lines (t=0)
 
-    if not os.path.exists(t_file):
-        print(f"Error: {t_file} not found.")
-        sys.exit(1)
+    # 1. Metadata Extraction
+    temp_match = re.search(r'(\d+)K', os.path.basename(traj_path))
+    temp_key = temp_match.group(0) if temp_match else "UnknownK"
+    time_key = f"frame_{s_idx}_{e_idx}"
 
-    traj = read(t_file, index=":")
-    all_system_elements = sorted(list(set(traj[0].get_chemical_symbols())))
+    # 2. Compute Current Profile
+    print(f"  [LOG] Reading frames {s_idx} to {e_idx} from {traj_path}...")
+    traj = read(traj_path, index=":")
+    all_elements = sorted(list(set(traj[0].get_chemical_symbols())))
+    grid, curr_dens = compute_smoothed_profile(traj[s_idx:e_idx+1], all_elements, axis=AXIS, sigma=SIGMA, res=RESOLUTION)
+    curr_perc = get_percentage(curr_dens)
 
-    # 1. Compute profiles using the configured PROJECTION_AXIS
-    grid, ref_d = compute_smoothed_profile([traj[0]], all_system_elements, axis=PROJECTION_AXIS, sigma=0.4)
-    avg_frames = traj[s_idx:e_idx+1]
-    _, avg_d = compute_smoothed_profile(avg_frames, all_system_elements, axis=PROJECTION_AXIS, sigma=0.4)
+    # 3. Update JSON Database
+    db = {}
+    if os.path.exists(JSON_NAME):
+        with open(JSON_NAME, 'r') as f: db = json.load(f)
+    if temp_key not in db: db[temp_key] = {}
+    db[temp_key][time_key] = {"grid": grid.tolist(), "profiles": {s: curr_dens[s].tolist() for s in all_elements}}
+    with open(JSON_NAME, 'w') as f: json.dump(db, f, indent=2)
+    print(f"  [LOG] Database updated in {JSON_NAME}")
 
-    # 2. GLOBAL PERCENTAGE PLOT
-    total_avg_dens = np.sum([avg_d[s] for s in all_system_elements], axis=0)
-    total_avg_dens = np.where(total_avg_dens == 0, 1e-10, total_avg_dens)
+    # 4. Search for Reference (t=0) in JSON
+    ref_perc = None
+    ref_label = ""
+    # Look for any key starting with 'frame_0_' under the same temperature
+    for key in db.get(temp_key, {}).keys():
+        if key.startswith("frame_0_"):
+            ref_data = db[temp_key][key]
+            ref_perc = get_percentage(ref_data['profiles'])
+            ref_label = key
+            break
+
+    # 5. Plotting
+    plt.figure(figsize=(11, 6))
     
-    plt.figure(figsize=(12, 6))
-    for s in all_system_elements:
-        percentage = (avg_d[s] / total_avg_dens) * 100
-        plt.plot(grid, percentage, label=s, lw=2.5)
+    # Plot SOLID lines (Current state - all elements)
+    for s in all_elements:
+        line, = plt.plot(grid, curr_perc[s], lw=2.0, label=f"{s}")
+        
+        # Plot DASHED lines (Reference state - only for selected elements)
+        if ref_perc and s in ref_elements:
+            plt.plot(grid, ref_perc[s], color=line.get_color(), ls='--', lw=1.5, alpha=0.7, 
+                     label=f"{s} (ref)")
 
-    # Set tick frequency for X-axis
-    ax = plt.gca()
-    ax.xaxis.set_major_locator(ticker.MultipleLocator(X_TICK_STEP))
-    ax.xaxis.set_minor_locator(ticker.AutoMinorLocator(MINOR_TICKS_PER_MAJOR))
-    ax.tick_params(which='major', length=7, width=1.5) 
-    ax.tick_params(which='minor', length=4, width=1) 
-
-    plt.ylabel("Atomic Concentration (%)")
-    plt.xlabel(f"Distance along {axis_name}-axis ($\mathrm{{\AA}}$)")
-    plt.title(f"Global Concentration Profile ({s_idx}-{e_idx})")
+    # Formatting
+    plt.xlabel(r"Distance along Z-axis ($\mathrm{\AA}$)", fontsize=12)
+    plt.ylabel("Atomic Concentration (%)", fontsize=12)
+    plt.title(f"Interface Analysis: {temp_key} at {time_key}", fontsize=14)
+    plt.grid(True, linestyle=':', alpha=0.6)
+    plt.xlim(grid[0], grid[-1])
     plt.ylim(-5, 105)
-    plt.legend(loc='center left', bbox_to_anchor=(1, 0.5))
-    plt.grid(True, linestyle='--', alpha=0.3)
+    
+    # Place legend outside
+    plt.legend(loc='center left', bbox_to_anchor=(1, 0.5), fontsize=10, frameon=True)
+    ax = plt.gca()
+    ax.xaxis.set_major_locator(ticker.MultipleLocator(5.0))
+    ax.xaxis.set_minor_locator(ticker.MultipleLocator(1.0))
+    ax.grid(True, which='major', linestyle='-', alpha=0.5)
+    ax.grid(True, which='minor', linestyle=':', alpha=0.3)
     plt.tight_layout()
-    plt.savefig(f"concentration_percentage_all_{s_idx}_{e_idx}.png", dpi=300)
-    plt.close()
-
-    # 3. INDIVIDUAL DENSITY PLOTS
-    for sym in target_elements:
-        if sym not in avg_d: continue
-            
-        plt.figure(figsize=(10, 5))
-        plt.plot(grid, avg_d[sym], label=f"{sym} (Avg)", color='blue', lw=2.0)
-        plt.plot(grid, ref_d[sym], '--', label=f"{sym} (t=0)", color='red', alpha=0.4, lw=1.2)
-        
-        # Set tick frequency for X-axis
-        ax_ind = plt.gca()
-        ax_ind.xaxis.set_major_locator(ticker.MultipleLocator(X_TICK_STEP))
-        ax_ind.xaxis.set_minor_locator(ticker.AutoMinorLocator(MINOR_TICKS_PER_MAJOR))
-        ax_ind.tick_params(which='major', length=7, width=1.5)
-        ax_ind.tick_params(which='minor', length=4, width=1)
-        
-        plt.ylabel(r"Number Density ($\mathrm{atoms}/\mathrm{\AA}^{3}$)")
-        plt.xlabel(f"Distance along {axis_name}-axis ($\mathrm{{\AA}}$)")
-        plt.title(f"Density Profile: {sym}")
-        plt.legend(loc='upper right')
-        plt.grid(True, linestyle='--', alpha=0.3)
-        plt.tight_layout()
-        plt.savefig(f"density_{sym}_{s_idx}_{e_idx}.png", dpi=300)
-        plt.close()
+    
+    plot_name = f"analysis_{temp_key}_{time_key}.png"
+    plt.savefig(plot_name, dpi=300)
+    print(f"  [LOG] Success! Analysis plot saved as {plot_name}")
 
 if __name__ == "__main__":
     main()
