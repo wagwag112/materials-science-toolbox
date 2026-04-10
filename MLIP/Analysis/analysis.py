@@ -50,16 +50,29 @@ def init_helvetica_font(font_dir):
 font_dir = r"/home/tsai0000/helvetica/"
 font_prop = init_helvetica_font(font_dir)
 
+# =============================================================================
 # --- Configuration Section ---
-TIMESTEP_FS = 2.0
-LOG_INTERVAL = 50
-DIM = 3
+# =============================================================================
+TIMESTEP_FS   = 2.0    # MD timestep in femtoseconds
+LOG_INTERVAL  = 50     # Steps per saved frame
+DIM           = 3      # Dimensionality (3 for bulk/slab 3D)
 MOBILE_ION_SYMBOL = "Li"
-N_BLOCKS = 5  
+N_BLOCKS      = 5      # Number of blocks for error estimation
+
+# --- Auto-fit sliding window parameters ---
+BALLISTIC_PS  = 10.0    # Exclude early ballistic regime (ps)
+WINDOW_SIZE_PS = 200.0  # Sliding window size (ps)
+WINDOW_STEP_PS = 10.0   # Step size between windows (ps)
+MIN_R2        = 0.97   # Minimum R^2 threshold to accept a window
+
+# --- Extrapolation target ---
+EXTRAP_TEMP_K = 300    # Temperature to extrapolate D and sigma to (K)
+
+# =============================================================================
 
 # --- Constants ---
-k_B = 1.380649e-23      # J/K
-e_charge = 1.602176634e-19  # C
+k_B      = 1.380649e-23       # J/K
+e_charge = 1.602176634e-19    # C
 
 # --- Global plot style settings ---
 plt.rcParams.update({
@@ -72,6 +85,10 @@ plt.rcParams.update({
     "mathtext.default": "regular"
 })
 
+# =============================================================================
+# --- Core Functions (unchanged) ---
+# =============================================================================
+
 def load_trajectory(filename):
     try:
         traj = read(filename, index=":")
@@ -83,78 +100,139 @@ def load_trajectory(filename):
 
 def unwrap_all_atoms_vectorized(frames):
     """Vectorized PBC unwrapping to ensure continuous trajectories."""
-    pos_all = np.array([f.get_positions() for f in frames])
-    cell = frames[0].get_cell()
+    pos_all  = np.array([f.get_positions() for f in frames])
+    cell     = frames[0].get_cell()
     inv_cell = np.linalg.inv(cell)
-    
-    diffs = np.diff(pos_all, axis=0)
+
+    diffs      = np.diff(pos_all, axis=0)
     diffs_frac = np.einsum('ijk,kl->ijl', diffs, inv_cell)
     shifts_frac = -np.round(diffs_frac)
     shifts_cart = np.einsum('ijk,kl->ijl', shifts_frac, cell)
-    
-    unwrapped = np.zeros_like(pos_all)
+
+    unwrapped    = np.zeros_like(pos_all)
     unwrapped[0] = pos_all[0]
-    # Fixed logic to avoid accumulation drift
     unwrapped[1:] = pos_all[1:] + np.cumsum(shifts_cart, axis=0)
-    
+
     return unwrapped
 
 def subtract_com_drift(unwrapped_pos_all, framework_indices, target_indices):
     """Subtracts framework Center of Mass drift from target species."""
-    framework_pos = unwrapped_pos_all[:, framework_indices, :]
-    com_framework = np.mean(framework_pos, axis=1) 
-    drift = com_framework - com_framework[0]
-    
-    target_pos = unwrapped_pos_all[:, target_indices, :]
-    corrected_pos = target_pos - drift[:, np.newaxis, :]
+    framework_pos  = unwrapped_pos_all[:, framework_indices, :]
+    com_framework  = np.mean(framework_pos, axis=1)
+    drift          = com_framework - com_framework[0]
+
+    target_pos     = unwrapped_pos_all[:, target_indices, :]
+    corrected_pos  = target_pos - drift[:, np.newaxis, :]
     return corrected_pos
 
 def compute_msd(corrected_pos):
     """Computes MSD for a segment using its local starting frame."""
-    r0 = corrected_pos[0]
-    dr = corrected_pos - r0
-    sq_dist = np.sum(dr**2, axis=2) 
-    msd = np.mean(sq_dist, axis=1) 
+    r0      = corrected_pos[0]
+    dr      = corrected_pos - r0
+    sq_dist = np.sum(dr**2, axis=2)
+    msd     = np.mean(sq_dist, axis=1)
     return msd
 
 def fit_diffusivity(msd, start_time_ps, end_time_ps, timestep_fs, log_interval):
-    n_frames = len(msd)
+    n_frames         = len(msd)
     time_per_frame_ps = (timestep_fs * log_interval) / 1000.0
-    times_ps = np.arange(n_frames) * time_per_frame_ps
+    times_ps         = np.arange(n_frames) * time_per_frame_ps
 
     start_idx = np.searchsorted(times_ps, start_time_ps, side='left')
-    end_idx = np.searchsorted(times_ps, end_time_ps, side='right')
+    end_idx   = np.searchsorted(times_ps, end_time_ps,   side='right')
 
     if end_idx - start_idx < 2:
         return 0.0, 0.0, np.array([]), np.array([])
 
     x_fit = times_ps[start_idx:end_idx]
     y_fit = msd[start_idx:end_idx]
-    
+
     slope, intercept, r_val, _, _ = linregress(x_fit, y_fit)
-    D_cm2_s = (slope * 1e-4) / (2 * DIM)
+    D_cm2_s  = (slope * 1e-4) / (2 * DIM)
     fit_line = intercept + slope * x_fit
-    
+
     return D_cm2_s, r_val**2, x_fit, fit_line
 
 def calculate_conductivity(D_cm2_s, D_std, temp_k, volume_ang3, n_ions):
-    vol_cm3 = volume_ang3 * 1e-24
+    vol_cm3   = volume_ang3 * 1e-24
     n_density = n_ions / vol_cm3
-    q = e_charge
-    sigma = (n_density * (q**2) * D_cm2_s) / (k_B * temp_k)
+    q         = e_charge
+    sigma     = (n_density * (q**2) * D_cm2_s) / (k_B * temp_k)
     sigma_std = sigma * (D_std / D_cm2_s) if D_cm2_s > 0 else 0
     return sigma, sigma_std
 
+# =============================================================================
+# --- NEW: Auto R^2 sliding window fit ---
+# =============================================================================
+
+def auto_find_best_window(msd, timestep_fs, log_interval,
+                          ballistic_ps, window_size_ps, window_step_ps):
+    """
+    Scans ensemble MSD with a sliding window and returns the window
+    (start_ps, end_ps) that yields the highest R^2 from linregress.
+
+    Constraints:
+      - Window starts no earlier than ballistic_ps
+      - slope must be > 0 (D > 0)
+      - Returns best window found; falls back to last 30% if nothing passes MIN_R2
+    """
+    time_per_frame_ps = (timestep_fs * log_interval) / 1000.0
+    n_frames          = len(msd)
+    total_time_ps     = (n_frames - 1) * time_per_frame_ps
+    times_ps          = np.arange(n_frames) * time_per_frame_ps
+
+    best_r2     = -1.0
+    best_start  = ballistic_ps
+    best_end    = ballistic_ps + window_size_ps
+
+    t_start = ballistic_ps
+    while t_start + window_size_ps <= total_time_ps:
+        t_end = t_start + window_size_ps
+
+        si = np.searchsorted(times_ps, t_start, side='left')
+        ei = np.searchsorted(times_ps, t_end,   side='right')
+
+        if ei - si < 4:
+            t_start += window_step_ps
+            continue
+
+        x = times_ps[si:ei]
+        y = msd[si:ei]
+        slope, _, r_val, _, _ = linregress(x, y)
+
+        r2 = r_val**2
+        if slope > 0 and r2 > best_r2:
+            best_r2    = r2
+            best_start = t_start
+            best_end   = t_end
+
+        t_start += window_step_ps
+
+    if best_r2 < MIN_R2:
+        # Fallback: last 30% of trajectory after ballistic
+        fallback_start = max(ballistic_ps, total_time_ps * 0.70)
+        fallback_end   = total_time_ps
+        print(f"  Warning: Best R^2={best_r2:.4f} < {MIN_R2}. "
+              f"Falling back to [{fallback_start:.1f}, {fallback_end:.1f}] ps.")
+        best_start = fallback_start
+        best_end   = fallback_end
+
+    return best_start, best_end, best_r2
+
+# =============================================================================
+# --- Plotting ---
+# =============================================================================
+
 def plot_msd(msd, fit_t, fit_line, title, filename, fit_range_str, end_time_ps):
     time_per_frame_ps = (TIMESTEP_FS * LOG_INTERVAL) / 1000.0
-    times_ps = np.arange(len(msd)) * time_per_frame_ps
-    idx_limit = np.searchsorted(times_ps, end_time_ps, side='right')
-    
+    times_ps          = np.arange(len(msd)) * time_per_frame_ps
+    idx_limit         = np.searchsorted(times_ps, end_time_ps, side='right')
+
     plt.figure(figsize=(8, 6))
     plt.plot(times_ps[:idx_limit], msd[:idx_limit], color="black", label="MSD Data")
     if len(fit_t) > 0:
         plt.plot(fit_t, fit_line, "--", color="red", label=f"Fit ({fit_range_str})")
-    
+
     plt.xlabel(r"Time (ps)")
     plt.ylabel(r"MSD ($\mathrm{\AA}^{2}$)")
     plt.title(title)
@@ -164,76 +242,94 @@ def plot_msd(msd, fit_t, fit_line, title, filename, fit_range_str, end_time_ps):
     plt.savefig(filename, dpi=300)
     plt.close()
 
+# =============================================================================
+# --- Main ---
+# =============================================================================
+
 def main():
-    # Robust Argument Parsing with Explicit Flags
+    # --- Argument Parsing ---
+    # Usage:
+    #   --full  <t1> <t2> ...
+    #   --slab  <z_min> <z_max> <t1> <t2> ...
     if len(sys.argv) < 2:
-        sys.exit("Usage:\n  --full <ps_start> <ps_end> <t1> <t2> ...\n  --slab <z_min> <z_max> <ps_start> <ps_end> <t1> <t2> ...")
+        sys.exit("Usage:\n"
+                 "  --full <t1> <t2> ...\n"
+                 "  --slab <z_min> <z_max> <t1> <t2> ...")
 
     if sys.argv[1] == "--full":
-        mode = "FULL"
-        start_fit_ps = float(sys.argv[2])
-        end_fit_ps   = float(sys.argv[3])
-        temps = [int(t) for t in sys.argv[4:]]
+        mode   = "FULL"
+        temps  = [int(t) for t in sys.argv[2:]]
         z_min, z_max = None, None
         suffix = "_full"
         print("\n--> Mode: FULL CELL analysis.")
+
     elif sys.argv[1] == "--slab":
-        mode = "SLAB"
-        z_min        = float(sys.argv[2])
-        z_max        = float(sys.argv[3])
-        start_fit_ps = float(sys.argv[4])
-        end_fit_ps   = float(sys.argv[5])
-        temps = [int(t) for t in sys.argv[6:]]
+        mode   = "SLAB"
+        z_min  = float(sys.argv[2])
+        z_max  = float(sys.argv[3])
+        temps  = [int(t) for t in sys.argv[4:]]
         suffix = f"_z{int(z_min)}-{int(z_max)}"
         print(f"\n--> Mode: SLAB analysis in Z-range [{z_min:.1f}, {z_max:.1f}].")
     else:
         sys.exit("Error: Invalid flag. Use --full or --slab.")
 
+    print(f"--> Auto-fit config: ballistic={BALLISTIC_PS} ps | "
+          f"window={WINDOW_SIZE_PS} ps | step={WINDOW_STEP_PS} ps\n")
+
     results = {}
 
     for T in temps:
         traj_file = f"md_{T}K.traj"
-        if not os.path.isfile(traj_file): continue
+        if not os.path.isfile(traj_file):
+            print(f"  Warning: {traj_file} not found, skipping.")
+            continue
 
         print(f"Processing {T}K...")
         frames = load_trajectory(traj_file)
-        
-        # Area and Slab Volume Correction
-        cell = frames[0].get_cell()
-        xy_area = np.linalg.norm(np.cross(cell[0], cell[1]))
-        pos_t0 = frames[0].get_positions()
-        symbols = np.array(frames[0].get_chemical_symbols())
-        
-        mobile_set = {atom.index for atom in frames[0] if atom.symbol == MOBILE_ION_SYMBOL}
+
+        # --- Geometry ---
+        cell     = frames[0].get_cell()
+        xy_area  = np.linalg.norm(np.cross(cell[0], cell[1]))
+        pos_t0   = frames[0].get_positions()
+        symbols  = np.array(frames[0].get_chemical_symbols())
+
+        mobile_set       = {atom.index for atom in frames[0] if atom.symbol == MOBILE_ION_SYMBOL}
         framework_indices = np.array([idx for idx in np.arange(len(frames[0])) if idx not in mobile_set])
-        
+
         if mode == "SLAB":
-            z_mask = (pos_t0[:, 2] >= z_min) & (pos_t0[:, 2] <= z_max)
-            # Added sorted() for index reproducibility
+            z_mask         = (pos_t0[:, 2] >= z_min) & (pos_t0[:, 2] <= z_max)
             target_indices = np.array(sorted([idx for idx in mobile_set if z_mask[idx]]))
-            vol_eff = xy_area * (z_max - z_min)
+            vol_eff        = xy_area * (z_max - z_min)
         else:
             target_indices = np.array(sorted(list(mobile_set)))
-            vol_eff = frames[0].get_volume()
-            
+            vol_eff        = frames[0].get_volume()
+
         n_target = len(target_indices)
         if n_target == 0:
             print(f"  Warning: No mobile ions found in target region. Skipping {T}K.")
             continue
 
-        # Analysis Pipeline: Unwrap -> COM Correction -> MSD
-        unwrapped_all = unwrap_all_atoms_vectorized(frames)
-        corrected_target_all = subtract_com_drift(unwrapped_all, framework_indices, target_indices)
+        # --- Pipeline: Unwrap -> COM Correction -> MSD ---
+        unwrapped_all         = unwrap_all_atoms_vectorized(frames)
+        corrected_target_all  = subtract_com_drift(unwrapped_all, framework_indices, target_indices)
+        full_msd              = compute_msd(corrected_target_all)
 
+        # --- Auto-find best fit window ---
+        start_fit_ps, end_fit_ps, window_r2 = auto_find_best_window(
+            full_msd, TIMESTEP_FS, LOG_INTERVAL,
+            BALLISTIC_PS, WINDOW_SIZE_PS, WINDOW_STEP_PS
+        )
+        print(f"  Auto-fit window: [{start_fit_ps:.1f}, {end_fit_ps:.1f}] ps  |  R^2={window_r2:.5f}")
+
+        # --- Block averaging for D and error ---
         time_per_frame_ps = (TIMESTEP_FS * LOG_INTERVAL) / 1000.0
         start_idx = int(start_fit_ps / time_per_frame_ps)
         end_idx   = int(end_fit_ps   / time_per_frame_ps)
-        
-        fit_pos = corrected_target_all[start_idx:end_idx]
+
+        fit_pos    = corrected_target_all[start_idx:end_idx]
         block_size = len(fit_pos) // N_BLOCKS
         block_duration = block_size * time_per_frame_ps
-        
-        # Block duration warning
+
         if block_duration < 5.0:
             print(f"  Warning [{T}K]: Block duration ({block_duration:.1f} ps) is quite short.")
 
@@ -245,53 +341,115 @@ def main():
             D, _, _, _ = fit_diffusivity(b_msd, 0.0, block_duration * 0.9, TIMESTEP_FS, LOG_INTERVAL)
             if D > 0: block_diffusivities.append(D)
 
-        if not block_diffusivities: continue
+        if not block_diffusivities:
+            print(f"  Warning: No valid block diffusivities for {T}K. Skipping.")
+            continue
 
         D_avg = np.mean(block_diffusivities)
-        D_std = np.std(block_diffusivities) / np.sqrt(len(block_diffusivities)) 
-        
-        full_msd = compute_msd(corrected_target_all)
-        D_plot, r2, fit_t, fit_line = fit_diffusivity(full_msd, start_fit_ps, end_fit_ps, TIMESTEP_FS, LOG_INTERVAL)
-        
+        D_std = np.std(block_diffusivities) / np.sqrt(len(block_diffusivities))
+
+        # --- Full MSD fit for plot ---
+        D_plot, r2, fit_t, fit_line = fit_diffusivity(
+            full_msd, start_fit_ps, end_fit_ps, TIMESTEP_FS, LOG_INTERVAL
+        )
+
         sigma, sigma_std = calculate_conductivity(D_avg, D_std, T, vol_eff, n_target)
-        results[T] = {'D': D_avg, 'D_std': D_std, 'sigma': sigma, 'sigma_std': sigma_std, 'r2': r2}
+        results[T] = {
+            'D': D_avg, 'D_std': D_std,
+            'sigma': sigma, 'sigma_std': sigma_std,
+            'r2': window_r2,
+            'fit_start': start_fit_ps, 'fit_end': end_fit_ps
+        }
 
-        # Plot formatting with scientific notation
-        exponent = math.floor(math.log10(abs(D_avg))) if D_avg != 0 else 0
-        factor = 10**exponent
-        png_name = f"msd_{T}K{suffix}.png"
-        title_str = fr"$T={T}\,\mathrm{{K}}, D=({D_avg/factor:.2f} \pm {D_std/factor:.2f}) \times 10^{{{exponent}}}\,\mathrm{{cm}}^2/\mathrm{{s}}$"
-        plot_msd(full_msd, fit_t, fit_line, title_str, png_name, f"{start_fit_ps}-{end_fit_ps} ps", end_fit_ps)
+        # --- MSD Plot ---
+        exponent  = math.floor(math.log10(abs(D_avg))) if D_avg != 0 else 0
+        factor    = 10**exponent
+        png_name  = f"msd_{T}K{suffix}.png"
+        title_str = (fr"$T={T}\,\mathrm{{K}},\;D=({D_avg/factor:.2f}"
+                     fr"\pm{D_std/factor:.2f})\times10^{{{exponent}}}"
+                     fr"\,\mathrm{{cm}}^2/\mathrm{{s}}$")
+        plot_msd(full_msd, fit_t, fit_line, title_str, png_name,
+                 f"{start_fit_ps:.0f}-{end_fit_ps:.0f} ps", end_fit_ps)
+        print(f"  D = {D_avg:.2e} +/- {D_std:.2e} cm^2/s  |  sigma = {sigma:.4e} S/cm")
 
-    if len(results) >= 3:
+    # =========================================================================
+    # --- Arrhenius + Extrapolation to EXTRAP_TEMP_K ---
+    # =========================================================================
+    if len(results) >= 2:
         sorted_temps = sorted(results.keys())
-        inv_T = 1000.0 / np.array(sorted_temps)
-        ln_D = np.log([results[t]['D'] for t in sorted_temps])
-        ln_D_err = np.array([results[t]['D_std']/results[t]['D'] for t in sorted_temps])
-        
-        # Arrhenius Fit for Activation Energy
-        slope, intercept, r_val, _, std_err = linregress(1.0/np.array(sorted_temps), ln_D)
-        ea_ev = (-slope * k_B) / e_charge
+        inv_T  = 1.0 / np.array(sorted_temps, float)
+        ln_D   = np.log([results[t]['D']   for t in sorted_temps])
+        ln_D_err = np.array([results[t]['D_std'] / results[t]['D'] for t in sorted_temps])
+
+        slope, intercept, r_val, _, std_err = linregress(inv_T, ln_D)
+        ea_ev     = (-slope * k_B) / e_charge
         ea_err_ev = (std_err * k_B) / e_charge
-        
+
+        # --- Extrapolate to EXTRAP_TEMP_K ---
+        D_extrap   = np.exp(intercept + slope * (1.0 / EXTRAP_TEMP_K))
+        # Propagate uncertainty: delta_lnD at extrap point
+        n_pts = len(sorted_temps)
+        inv_T_mean = np.mean(inv_T)
+        SS_xx = np.sum((inv_T - inv_T_mean)**2)
+        lnD_var = (std_err**2) * ((1.0/EXTRAP_TEMP_K - inv_T_mean)**2 / SS_xx + 1.0/n_pts)
+        D_extrap_err = D_extrap * np.sqrt(lnD_var)
+
+        # Volume and n_ions for conductivity extrapolation:
+        # Use average cell volume / slab volume across all temps (or just from first temp)
+        # We'll need vol_eff and n_target from any temp - use last processed
+        sigma_extrap, sigma_extrap_std = calculate_conductivity(
+            D_extrap, D_extrap_err, EXTRAP_TEMP_K, vol_eff, n_target
+        )
+
+        # --- Summary ---
+        print(f"\n{'='*60}")
+        print(f"  SUMMARY ({mode} mode{suffix.replace('_', ' ')})")
+        print(f"{'='*60}")
+        print(f"  {'T (K)':<10} {'D (cm^2/s)':<22} {'sigma (S/cm)':<22} {'R^2':<10} {'Fit range (ps)'}")
+        print(f"  {'-'*80}")
+        for T in sorted_temps:
+            r = results[T]
+            print(f"  {T:<10} "
+                  f"{r['D']:.2e} +/- {r['D_std']:.1e}   "
+                  f"{r['sigma']:.4e} +/- {r['sigma_std']:.1e}   "
+                  f"{r['r2']:.5f}   "
+                  f"[{r['fit_start']:.0f} - {r['fit_end']:.0f}]")
+
+        if EXTRAP_TEMP_K not in results:
+            print(f"  {'-'*80}")
+            print(f"  {EXTRAP_TEMP_K}K (extrap)  "
+                  f"D = {D_extrap:.2e} +/- {D_extrap_err:.1e} cm^2/s  |  "
+                  f"sigma = {sigma_extrap:.4e} +/- {sigma_extrap_std:.1e} S/cm")
+
+        print(f"\n  Ea = {ea_ev:.4f} +/- {ea_err_ev:.4f} eV")
+        print(f"  Arrhenius R^2 = {r_val**2:.4f}")
+        print(f"{'='*60}\n")
+
+        # --- Arrhenius Plot ---
+        inv_T_plot = 1000.0 / np.array(sorted_temps, float)
         plt.figure(figsize=(8, 6))
-        plt.errorbar(inv_T, ln_D, yerr=ln_D_err, fmt='ko', capsize=5, label="Data")
-        plt.plot(inv_T, intercept + slope * (1.0/np.array(sorted_temps)), 'r--', label="Arrhenius Fit")
-        plt.xlabel("1000 / T (K$^{-1}$)")
-        plt.ylabel("ln(D)")
-        # Fixed LaTeX title formatting
-        plt.title(rf"Arrhenius: $E_a = {ea_ev:.3f} \pm {ea_err_ev:.3f}$ eV{suffix.replace('_', ' ')}")
+        plt.errorbar(inv_T_plot, ln_D, yerr=ln_D_err,
+                     fmt='ko', capsize=5, label="Simulation data")
+
+        x_smooth = np.linspace(min(inv_T), max(inv_T), 200)
+        plt.plot(1000.0 * x_smooth,
+                 intercept + slope * x_smooth,
+                 'r--', label="Arrhenius fit")
+
+
+        plt.xlabel(r"1000 / $T$ (K$^{-1}$)")
+        plt.ylabel(r"ln($D$)")
+        plt.title(rf"Arrhenius: $E_a = {ea_ev:.3f} \pm {ea_err_ev:.3f}$ eV"
+                  + suffix.replace('_', ' '))
         plt.legend()
         plt.grid(True, alpha=0.3)
         plt.tight_layout()
         plt.savefig(f"arrhenius{suffix}.png", dpi=300)
-        
-        print(f"\n--- Final Summary ({mode} Mode) ---")
-        print(f"Calculated Ea: {ea_ev:.4f} +/- {ea_err_ev:.4f} eV")
-        print(f"R-squared: {r_val**2:.4f}\n")
-        for T in sorted_temps:
-            r = results[T]
-            print(f"T={T}K: D={r['D']:.2e} +/- {r['D_std']:.2e} cm2/s, Sigma={r['sigma']:.4e} +/- {r['sigma_std']:.4e} S/cm")
+        plt.close()
+        print(f"  Saved: arrhenius{suffix}.png")
+
+    else:
+        print("\n[SKIP] Arrhenius: need at least 2 temperatures.")
 
 if __name__ == "__main__":
     main()
