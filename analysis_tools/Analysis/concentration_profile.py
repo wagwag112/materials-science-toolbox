@@ -77,15 +77,13 @@ def main():
     print(f"  [LOG] Database updated in {JSON_NAME}")
 
     # 4. Search for Reference (t=0) in JSON
-    ref_perc = None
-    ref_label = ""
-    # Look for any key starting with 'frame_0_' under the same temperature
-    for key in db.get(temp_key, {}).keys():
-        if key.startswith("frame_0_"):
-            ref_data = db[temp_key][key]
-            ref_perc = get_percentage(ref_data['profiles'])
-            ref_label = key
-            break
+    n_ref_frames = 10  
+    
+    n_ref_frames = min(n_ref_frames, len(traj)) 
+    
+    print(f"  [LOG] Computing reference profile directly from first {n_ref_frames} frames...")
+    _, ref_dens = compute_smoothed_profile(traj[0:n_ref_frames], all_elements, axis=AXIS, sigma=SIGMA, res=RESOLUTION)
+    ref_perc = get_percentage(ref_dens)
 
     # 5. Plotting
     plt.figure(figsize=(11, 6))
