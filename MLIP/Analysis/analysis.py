@@ -3,6 +3,7 @@
 
 import sys
 import os
+import itertools
 import matplotlib
 matplotlib.use('Agg')
 import numpy as np
@@ -61,11 +62,14 @@ N_BLOCKS      = 4      # Number of blocks for error estimation
 
 # --- Auto-fit sliding window parameters ---
 BALLISTIC_PS      = 20.0   # Exclude early ballistic regime (ps)
-WINDOW_MAX_PS     = 180.0  # Starting (largest) window size (ps)
-WINDOW_MIN_PS     = 60.0   # Minimum window size before giving up (ps)
-WINDOW_SIZE_STEP_PS = 1.0 # Step to shrink window size if R^2 not met (ps)
+WINDOW_MAX_PS      = 180.0  # Starting (largest) window size (ps)
+WINDOW_MIN_PS      = 60.0   # Minimum window size before giving up (ps)
+WINDOW_SIZE_STEP_PS = 1.0  # Step to shrink window size if R^2 not met (ps)
 WINDOW_STEP_PS    = 1.0    # Sliding step between windows (ps)
 MIN_R2            = 0.96   # Minimum R^2 threshold to accept a window
+
+# --- Arrhenius best-subset selection ---
+N_ARRHENIUS_POINTS = 4
 
 # --- Extrapolation target ---
 EXTRAP_TEMP_K = 300    # Temperature to extrapolate D and sigma to (K)
@@ -123,12 +127,12 @@ def subtract_com_drift(unwrapped_pos_all, framework_indices, target_indices):
     com_framework  = np.mean(framework_pos, axis=1)
     drift          = com_framework - com_framework[0]
 
-    target_pos     = unwrapped_pos_all[:, target_indices, :]
+    target_pos      = unwrapped_pos_all[:, target_indices, :]
     corrected_pos  = target_pos - drift[:, np.newaxis, :]
     return corrected_pos
 
 def compute_msd(corrected_pos):
-    """Computes MSD for a segment using its local starting frame."""
+    """Computes MSD for a trajectory."""
     r0      = corrected_pos[0]
     dr      = corrected_pos - r0
     sq_dist = np.sum(dr**2, axis=2)
@@ -198,11 +202,8 @@ def auto_find_best_window(msd, timestep_fs, log_interval,
             print(f"  Window size {window_size:.0f} ps -> R^2={best_r2:.5f} (accepted)")
             return best_start, best_end, best_r2
 
-        print(f"  Window size {window_size:.0f} ps -> best R^2={best_r2:.5f} < {MIN_R2}, shrinking...")
         window_size -= WINDOW_SIZE_STEP_PS
 
-    print(f"  Warning: No window met MIN_R2={MIN_R2}. Using global best R^2={best_r2:.5f} "
-          f"at [{best_start:.0f}-{best_end:.0f}] ps.")
     return best_start, best_end, best_r2
 
 def plot_msd(msd, fit_t, fit_line, title, filename, fit_range_str, end_time_ps):
@@ -225,6 +226,44 @@ def plot_msd(msd, fit_t, fit_line, title, filename, fit_range_str, end_time_ps):
     plt.close()
 
 # =============================================================================
+# --- Arrhenius best-subset selection ---
+# =============================================================================
+
+def r2_linear(x, y):
+    A    = np.vstack([x, np.ones(len(x))]).T
+    coef = np.linalg.lstsq(A, y, rcond=None)[0]
+    yhat = A @ coef
+    ss_res = np.sum((y - yhat) ** 2)
+    ss_tot = np.sum((y - np.mean(y)) ** 2)
+    return 1.0 - ss_res / ss_tot if ss_tot > 0 else -1.0
+
+
+def select_best_arrhenius_subset(sorted_temps, results, n_select, quantity="sigma"):
+    n_total = len(sorted_temps)
+    if n_select is None or n_select >= n_total:
+        return sorted_temps, None
+
+    inv_T_all = np.array([1.0 / t for t in sorted_temps])
+    if quantity == "sigma":
+        y_all = np.array([np.log(results[t]['sigma']) for t in sorted_temps])
+    else:
+        y_all = np.array([np.log(results[t]['D'])     for t in sorted_temps])
+
+    best_r2  = -np.inf
+    best_idx = None
+
+    for idx in itertools.combinations(range(n_total), n_select):
+        idx = list(idx)
+        r2  = r2_linear(inv_T_all[idx], y_all[idx])
+        if r2 > best_r2:
+            best_r2  = r2
+            best_idx = idx
+
+    best_temps = [sorted_temps[i] for i in best_idx]
+    return best_temps, best_r2
+
+
+# =============================================================================
 # --- Main ---
 # =============================================================================
 
@@ -236,15 +275,14 @@ def main():
 
     if sys.argv[1] == "--full":
         mode, temps, z_min, z_max, suffix = "FULL", [int(t) for t in sys.argv[2:]], None, None, "_full"
-        print("\n--> Mode: FULL CELL analysis.")
     elif sys.argv[1] == "--slab":
         mode, z_min, z_max = "SLAB", float(sys.argv[2]), float(sys.argv[3])
         temps, suffix = [int(t) for t in sys.argv[4:]], f"_z{int(z_min)}-{int(z_max)}"
-        print(f"\n--> Mode: SLAB analysis in Z-range [{z_min:.1f}, {z_max:.1f}].")
     else:
         sys.exit("Error: Invalid flag.")
 
-    print(f"--> Auto-fit config: ballistic={BALLISTIC_PS} ps | window={WINDOW_MIN_PS}-{WINDOW_MAX_PS} ps | size_step={WINDOW_SIZE_STEP_PS} ps\n")
+    print(f"\n--> Mode: {mode} analysis.")
+    print(f"--> Auto-fit config: ballistic={BALLISTIC_PS} ps | window={WINDOW_MIN_PS}-{WINDOW_MAX_PS} ps")
 
     results = {}
     last_vol, last_n = 0, 0
@@ -257,108 +295,121 @@ def main():
         frames = load_trajectory(traj_file)
         cell = frames[0].get_cell()
         xy_area = np.linalg.norm(np.cross(cell[0], cell[1]))
-        pos_t0 = frames[0].get_positions()
+        
+        # Identify ions once at the beginning
         mobile_set = {atom.index for atom in frames[0] if atom.symbol == MOBILE_ION_SYMBOL}
         framework_indices = np.array([idx for idx in np.arange(len(frames[0])) if idx not in mobile_set])
 
         if mode == "SLAB":
-            z_mask = (pos_t0[:, 2] >= z_min) & (pos_t0[:, 2] <= z_max)
-            target_indices = np.array(sorted([idx for idx in mobile_set if z_mask[idx]]))
             vol_eff = xy_area * (z_max - z_min)
+            pos_0 = frames[0].get_positions()
+            # Select only ions within slab at t=0
+            target_indices = np.array(sorted([idx for idx in mobile_set if z_min <= pos_0[idx, 2] <= z_max]))
         else:
-            target_indices = np.array(sorted(list(mobile_set)))
             vol_eff = frames[0].get_volume()
+            target_indices = np.array(sorted(list(mobile_set)))
 
+        if len(target_indices) == 0:
+            print(f"  Warning: No mobile ions found for {T}K.")
+            continue
+
+        # --- Direct MSD Calculation (No Tracking/Stitching) ---
+        unwrapped_all = unwrap_all_atoms_vectorized(frames)
+        corrected_pos = subtract_com_drift(unwrapped_all, framework_indices, target_indices)
+        full_msd = compute_msd(corrected_pos)
+        
         n_target = len(target_indices)
-        if n_target == 0: continue
         last_vol, last_n = vol_eff, n_target
 
-        unwrapped_all = unwrap_all_atoms_vectorized(frames)
-        corrected_target_all = subtract_com_drift(unwrapped_all, framework_indices, target_indices)
-        full_msd = compute_msd(corrected_target_all)
-
+        # --- Window & Block Error Estimation ---
         start_fit_ps, end_fit_ps, window_r2 = auto_find_best_window(full_msd, TIMESTEP_FS, LOG_INTERVAL, BALLISTIC_PS, WINDOW_STEP_PS)
         
-        time_per_frame_ps = (TIMESTEP_FS * LOG_INTERVAL) / 1000.0
-        start_idx = int(start_fit_ps / time_per_frame_ps)
-        end_idx   = int(end_fit_ps   / time_per_frame_ps)
-        fit_pos   = corrected_target_all[start_idx:end_idx]
-        block_size = len(fit_pos) // N_BLOCKS
-        
         block_diffusivities = []
+        block_duration = (end_fit_ps - start_fit_ps) / N_BLOCKS
         for b in range(N_BLOCKS):
-            block_seg = fit_pos[b*block_size : (b+1)*block_size]
-            if len(block_seg) < 2: continue
-            b_msd = compute_msd(block_seg)
-            D, _, _, _ = fit_diffusivity(b_msd, 0.0, (block_size*time_per_frame_ps)*0.9, TIMESTEP_FS, LOG_INTERVAL)
-            if D > 0: block_diffusivities.append(D)
+            b_start = start_fit_ps + b * block_duration
+            b_end   = start_fit_ps + (b + 1) * block_duration
+            D_b, _, _, _ = fit_diffusivity(full_msd, b_start, b_end, TIMESTEP_FS, LOG_INTERVAL)
+            if D_b > 0: block_diffusivities.append(D_b)
 
         if not block_diffusivities: continue
-        D_avg, D_std = np.mean(block_diffusivities), np.std(block_diffusivities) / np.sqrt(len(block_diffusivities))
-        sigma, sigma_std = calculate_conductivity(D_avg, D_std, T, vol_eff, n_target)
+        D_avg = np.mean(block_diffusivities)
+        D_std = np.std(block_diffusivities) / np.sqrt(len(block_diffusivities))
         
-        results[T] = {'D': D_avg, 'D_std': D_std, 'sigma': sigma, 'sigma_std': sigma_std, 'r2': window_r2, 'fit_start': start_fit_ps, 'fit_end': end_fit_ps}
+        sigma, sigma_std = calculate_conductivity(D_avg, D_std, T, vol_eff, n_target)
 
-        # --- Plot entire MSD trajectory ---
+        results[T] = {'D': D_avg, 'D_std': D_std, 'sigma': sigma, 'sigma_std': sigma_std,
+                      'r2': window_r2, 'fit_start': start_fit_ps, 'fit_end': end_fit_ps}
+
+        # --- Plot individual MSD ---
+        time_per_frame_ps = (TIMESTEP_FS * LOG_INTERVAL) / 1000.0
         total_time_ps = (len(full_msd) - 1) * time_per_frame_ps
-        D_plot, r2, fit_t, fit_line = fit_diffusivity(full_msd, start_fit_ps, end_fit_ps, TIMESTEP_FS, LOG_INTERVAL)
+        _, _, fit_t, fit_line = fit_diffusivity(full_msd, start_fit_ps, end_fit_ps, TIMESTEP_FS, LOG_INTERVAL)
         exponent = math.floor(math.log10(abs(D_avg))) if D_avg != 0 else 0
         factor = 10**exponent
         title_str = (fr"$T={T}\,\mathrm{{K}},\;D=({D_avg/factor:.2f}\pm{D_std/factor:.2f})\times10^{{{exponent}}}\,\mathrm{{cm}}^2/\mathrm{{s}}$")
         plot_msd(full_msd, fit_t, fit_line, title_str, f"msd_{T}K{suffix}.png", f"{start_fit_ps:.0f}-{end_fit_ps:.0f} ps", total_time_ps)
 
     # =========================================================================
-    # --- Arrhenius + Extrapolation (Fixed Statistical Logic) ---
-    # =========================================================================
-    if len(results) >= 2:
-        sorted_temps = sorted(results.keys())
-        inv_T = 1.0 / np.array(sorted_temps, float)
-        ln_D  = np.log([results[t]['D'] for t in sorted_temps])
-        slope, intercept, r_val, _, std_err_slope = linregress(inv_T, ln_D)
-        
-        # 1. Residual std for prediction interval (fixes inflated error bars)
-        n_pts = len(sorted_temps)
-        ln_D_pred = intercept + slope * inv_T
-        residuals = ln_D - ln_D_pred
-        resid_std = np.sqrt(np.sum(residuals**2) / (n_pts - 2)) if n_pts > 2 else np.nan
-        
-        x0         = 1.0 / EXTRAP_TEMP_K
-        inv_T_mean = np.mean(inv_T)
-        SS_xx      = np.sum((inv_T - inv_T_mean)**2)
-        D_extrap = np.exp(intercept + slope * x0)
-        
-        if not np.isnan(resid_std):
-            se_pred = resid_std * np.sqrt(1.0/n_pts + (x0 - inv_T_mean)**2 / SS_xx)
-            D_extrap_err = D_extrap * se_pred
-        else:
-            D_extrap_err = 0.0
+    # --- Arrhenius + Extrapolation ---
+    if len(results) < 2: return
 
-        ea_ev, ea_err_ev = (-slope * k_B) / e_charge, (std_err_slope * k_B) / e_charge
-        sigma_extrap, sigma_extrap_std = calculate_conductivity(D_extrap, D_extrap_err, EXTRAP_TEMP_K, last_vol, last_n)
+    all_sorted_temps = sorted(results.keys())
+    selected_temps, subset_r2 = (all_sorted_temps, None)
+    if N_ARRHENIUS_POINTS and N_ARRHENIUS_POINTS < len(all_sorted_temps):
+        selected_temps, subset_r2 = select_best_arrhenius_subset(all_sorted_temps, results, N_ARRHENIUS_POINTS, "sigma")
 
-        # Summary Output
-        print(f"\n{'='*60}\n  SUMMARY ({mode})\n{'='*60}")
-        print(f"  {'T (K)':<10} {'D (cm^2/s)':<22} {'sigma (S/cm)':<22} {'R^2':<10} {'Fit range (ps)'}")
-        print(f"  {'-' * 85}")
-        for T in sorted_temps:
-            r = results[T]
-            print(f"  {T:<10} "
-                  f"{r['D']:.2e} +/- {r['D_std']:.1e}   "
-                  f"{r['sigma']:.4e} +/- {r['sigma_std']:.1e}   "
-                  f"{r['r2']:.5f}    "
-                  f"[{r['fit_start']:.0f} - {r['fit_end']:.0f}]")
-        print("-" * 85)
-        err_str = f"{D_extrap_err:.1e}" if not np.isnan(resid_std) else "N/A"
-        print(f"  {EXTRAP_TEMP_K}K (extrap)  D = {D_extrap:.2e} +/- {err_str} | sigma = {sigma_extrap:.4e} +/- {sigma_extrap_std:.1e}")
-        print(f"\n  Ea = {ea_ev:.4f} +/- {ea_err_ev:.4f} eV | Arrhenius R^2 = {r_val**2:.4f}\n{'='*60}")
+    inv_T = 1.0 / np.array(selected_temps, float)
+    ln_D  = np.log([results[t]['D'] for t in selected_temps])
+    slope, intercept, r_val, _, std_err_slope = linregress(inv_T, ln_D)
 
-        # Arrhenius Plot
-        plt.figure(figsize=(8, 6))
-        plt.errorbar(1000.0/np.array(sorted_temps), ln_D, yerr=[results[t]['D_std']/results[t]['D'] for t in sorted_temps], fmt='ko', capsize=5)
-        x_smooth = np.linspace(min(inv_T), max(inv_T), 200)
-        plt.plot(1000.0 * x_smooth, intercept + slope * x_smooth, 'r--')
-        plt.xlabel(r"1000 / $T$ (K$^{-1}$)"); plt.ylabel(r"ln($D$)"); plt.grid(True, alpha=0.3); plt.tight_layout()
-        plt.savefig(f"arrhenius{suffix}.png", dpi=300); plt.close()
+    n_pts = len(selected_temps)
+    resid_std = np.sqrt(np.sum((ln_D - (intercept + slope * inv_T))**2) / (n_pts - 2)) if n_pts > 2 else np.nan
+    x0 = 1.0 / EXTRAP_TEMP_K
+    D_extrap = np.exp(intercept + slope * x0)
+    SS_xx = np.sum((inv_T - np.mean(inv_T))**2)
+    se_pred = resid_std * np.sqrt(1.0/n_pts + (x0 - np.mean(inv_T))**2 / SS_xx) if not np.isnan(resid_std) else 0
+    D_extrap_err = D_extrap * se_pred
+
+    ea_ev, ea_err_ev = (-slope * k_B) / e_charge, (std_err_slope * k_B) / e_charge
+    sigma_extrap, sigma_extrap_std = calculate_conductivity(D_extrap, D_extrap_err, EXTRAP_TEMP_K, last_vol, last_n)
+
+    # --- Summary Table ---
+    print(f"\n{'='*70}")
+    print(f"  SUMMARY ({mode}) -- Continuous Trajectory (No Tracking)")
+    print(f"{'='*70}")
+    print(f"  {'T (K)':<10} {'D (cm^2/s)':<26} {'sigma (S/cm)':<26} {'MSD R^2':<10} {'Used'}")
+    print(f"  {'-' * 105}")
+    for T in all_sorted_temps:
+        r = results[T]
+        used = "YES" if T in selected_temps else "NO (excluded)"
+        print(f"  {T:<10} {r['D']:.2e} +/- {r['D_std']:.1e}   {r['sigma']:.4e} +/- {r['sigma_std']:.1e}   {r['r2']:.5f}   {used}")
+    print(f"  {'-' * 105}")
+    print(f"  {EXTRAP_TEMP_K}K (extrap)  D = {D_extrap:.2e} +/- {D_extrap_err:.1e} | sigma = {sigma_extrap:.4e} +/- {sigma_extrap_std:.1e}")
+    print(f"  Ea = {ea_ev:.4f} +/- {ea_err_ev:.4f} eV | Arrhenius R^2 = {r_val**2:.6f}")
+    print(f"{'='*70}")
+
+    # --- Arrhenius Plot ---
+    fig, ax = plt.subplots(figsize=(8, 6))
+    for t_list, color, label, fmt, face in [
+        ([t for t in all_sorted_temps if t not in selected_temps], 'grey', 'Excluded', 'o', 'none'),
+        (selected_temps, 'black', 'Selected', 'ko', 'black')]:
+        if not t_list: continue
+        inv_T_p = 1000.0 / np.array(t_list, float)
+        ln_D_p  = [np.log(results[t]['D']) for t in t_list]
+        yerr_p  = [results[t]['D_std'] / results[t]['D'] for t in t_list]
+        ax.errorbar(inv_T_p, ln_D_p, yerr=yerr_p, fmt=fmt, color=color, 
+                    markerfacecolor=face, capsize=5, label=label)
+
+    x_smooth = np.linspace(min(inv_T), max(inv_T), 100)
+    ax.plot(1000.0 * x_smooth, intercept + slope * x_smooth, 'r--', label=f'Fit: Ea={ea_ev:.3f} eV')
+    ax.set_xlabel(r"1000 / $T$ (K$^{-1}$)")
+    ax.set_ylabel(r"ln($D$)")
+    ax.legend()
+    ax.grid(True, alpha=0.3)
+    plt.tight_layout()
+    plt.savefig(f"arrhenius{suffix}.png", dpi=300)
+    plt.close()
 
 if __name__ == "__main__":
     main()
