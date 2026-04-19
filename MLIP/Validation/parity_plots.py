@@ -178,7 +178,7 @@ print(f"N    = {len(e_true)}")
 # ======================
 plt.rcParams.update({
     "font.size": 18,
-    "axes.titlesize": 18,
+    "axes.titlesize": 20,
     "axes.labelsize": 18,
     "xtick.labelsize": 16,
     "ytick.labelsize": 16,
@@ -196,7 +196,7 @@ limit = max(np.max(np.abs(y_true)), np.max(np.abs(y_pred))) * 1.05
 hb = plt.hexbin(
     y_true,
     y_pred,
-    gridsize=220,
+    gridsize=120,
     bins="log",
     mincnt=1,
     cmap="viridis"
@@ -210,7 +210,7 @@ plt.ylim(-limit, limit)
 
 plt.xlabel("DFT force (eV/$\\AA$)")
 plt.ylabel("ML force (eV/$\\AA$)")
-plt.title("Force Parity Plot")
+plt.title("Force Parity Plot", fontsize=24)
 
 plt.text(
     0.05,
@@ -259,7 +259,7 @@ plt.ylim(-limit_e, limit_e)
 
 plt.xlabel("DFT energy (meV/atom)")
 plt.ylabel("ML energy (meV/atom)")
-plt.title("Energy Parity Plot")
+plt.title("Energy Parity Plot", fontsize=24)
 
 plt.text(
     0.05,
