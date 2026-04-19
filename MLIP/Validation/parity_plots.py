@@ -25,13 +25,13 @@ OUTCAR_DIR = "/home/hoang0000/uma/NMC_new/train/test_folders"
 outcar_files = glob.glob(os.path.join(OUTCAR_DIR, "**/vasprun.xml"), recursive=True)
 
 #CHECKPOINT_PATH = "/home/hoang0000/inference_ckpt.pt"
-#CHECKPOINT_PATH = "/home/hoang0000/uma-s-1p2.pt"
-CHECKPOINT_PATH = "/home/hoang0000/uma_finetune/v2/202604-0514-5257-19ea/checkpoints/final/inference_ckpt.pt"
+CHECKPOINT_PATH = "/home/hoang0000/uma-s-1p2.pt"
+#CHECKPOINT_PATH = "/home/hoang0000/uma_finetune/v2/202604-0514-5257-19ea/checkpoints/final/inference_ckpt.pt"
 
 OUTPUT_FORCE = "force_parity.png"
 OUTPUT_ENERGY = "energy_parity.png"
 
-N_FRAMES_PER_FILE = 100  # number of random frames to sample per file
+N_FRAMES_PER_FILE = 70  # number of random frames to sample per file
 
 
 # ======================
@@ -163,8 +163,8 @@ mae_e = np.mean(np.abs(e_true - e_pred))
 rmse_e = np.sqrt(np.mean((e_true - e_pred) ** 2))
 
 print("\n===== FORCE RESULTS =====")
-print(f"MAE  = {mae_f:.4f} eV/A")
-print(f"RMSE = {rmse_f:.4f} eV/A")
+print(f"MAE  = {mae_f:.3f} eV/$\\AA$")
+print(f"RMSE = {rmse_f:.3f} eV/$\\AA$")
 print(f"N    = {len(y_true)}")
 
 print("\n===== ENERGY RESULTS =====")
@@ -177,12 +177,12 @@ print(f"N    = {len(e_true)}")
 # FONT SIZE
 # ======================
 plt.rcParams.update({
-    "font.size": 16,
-    "axes.titlesize": 16,
-    "axes.labelsize": 16,
-    "xtick.labelsize": 14,
-    "ytick.labelsize": 14,
-    "legend.fontsize": 14,
+    "font.size": 18,
+    "axes.titlesize": 18,
+    "axes.labelsize": 18,
+    "xtick.labelsize": 16,
+    "ytick.labelsize": 16,
+    "legend.fontsize": 16,
 })
 
 
@@ -208,14 +208,14 @@ plt.plot([-limit, limit], [-limit, limit], "r--", linewidth=1)
 plt.xlim(-limit, limit)
 plt.ylim(-limit, limit)
 
-plt.xlabel("DFT force (eV/A)")
-plt.ylabel("ML force (eV/A)")
-plt.title("Force parity: DFT vs MLIP")
+plt.xlabel("DFT force (eV/$\\AA$)")
+plt.ylabel("ML force (eV/$\\AA$)")
+plt.title("Force Parity Plot")
 
 plt.text(
     0.05,
     0.95,
-    f"MAE = {mae_f:.4f}\nRMSE = {rmse_f:.4f}\nPoints = {len(y_true)}",
+    f"MAE = {mae_f:.3f} eV/$\\AA$\nRMSE = {rmse_f:.3f} eV/$\\AA$\nPoints = {len(y_true)}",
     transform=plt.gca().transAxes,
     bbox=dict(facecolor="white", alpha=0.6),
     verticalalignment="top",
@@ -259,7 +259,7 @@ plt.ylim(-limit_e, limit_e)
 
 plt.xlabel("DFT energy (meV/atom)")
 plt.ylabel("ML energy (meV/atom)")
-plt.title("Energy parity: DFT vs MLIP")
+plt.title("Energy Parity Plot")
 
 plt.text(
     0.05,
