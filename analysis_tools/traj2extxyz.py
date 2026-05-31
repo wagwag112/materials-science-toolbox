@@ -24,7 +24,7 @@ def main():
         print("ERROR: Stride must be an integer.")
         sys.exit(1)
 
-    output_file = input_file.replace('.traj', '_sub.extxyz')
+    output_file = input_file.replace('.traj', '.extxyz')
 
     # --- 2. READING DATA ---
     print(f"Reading {input_file} with stride {stride}...")
