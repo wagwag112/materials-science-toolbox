@@ -20,7 +20,7 @@ total_time_ps=$1
 shift
 temps=("$@")
 
-mkdir -p logs results
+mkdir -p logs
 
 echo "Launching MD simulations sequentially on 1 GPU..."
 echo "Total simulation time = ${total_time_ps} ps"
