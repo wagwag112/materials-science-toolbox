@@ -14,14 +14,16 @@ def generate_dataset(input_file, num_strain, num_rattle):
 
     base_name = os.path.splitext(input_file)[0]
     
-    # Create output directories
-    strain_dir = f"strain_{base_name}"
-    rattle_dir = f"rattle_{base_name}"
+    # Create raw output directory and subdirectories
+    raw_dir = f"raw"
+    strain_dir = os.path.join(raw_dir, f"strain_{base_name}")
+    rattle_dir = os.path.join(raw_dir, f"rattle_{base_name}")
     
-    for folder in [strain_dir, rattle_dir]:
-        if os.path.exists(folder):
-            shutil.rmtree(folder)
-        os.makedirs(folder)
+    # Remove existing raw folder if present, then recreate structure
+    if os.path.exists(raw_dir):
+        shutil.rmtree(raw_dir)
+    os.makedirs(strain_dir)
+    os.makedirs(rattle_dir)
 
     print(f"--- Generating {num_strain} strained structures ---")
     # Generate Strained structures (Volume scaling from 0.9 to 1.1)
@@ -45,7 +47,7 @@ def generate_dataset(input_file, num_strain, num_rattle):
         filename = os.path.join(rattle_dir, f"POSCAR_rattle_{i:03d}.vasp")
         write(filename, rattled_atoms, format='vasp')
 
-    print(f"\nDone! Files are in '{strain_dir}' and '{rattle_dir}' folders.")
+    print(f"\nDone! Files are in '{raw_dir}' with subfolders '{strain_dir}' and '{rattle_dir}'.")
 
 if __name__ == "__main__":
     if len(sys.argv) != 4:
