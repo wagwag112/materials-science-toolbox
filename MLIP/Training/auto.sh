@@ -10,58 +10,59 @@ RUN_SCRIPT="$BASE_DIR/run.sh"
 # Create calculation root directory
 mkdir -p "$CALC_DIR"
 
-# Check if RAW_DIR exists
+# Auto-detect sub-folders inside raw (no need to list them manually)
 if [ ! -d "$RAW_DIR" ]; then
-    echo "Error: Raw directory $RAW_DIR does not exist!"
+    echo "Warning: raw directory '$RAW_DIR' not found. Exiting."
     exit 1
 fi
 
-# Automatically detect all subdirectories inside RAW_DIR
-for SEARCH_PATH in "$RAW_DIR"/*; do
-    
-    # Check if it is actually a directory
-    if [ ! -d "$SEARCH_PATH" ]; then
+found_any=false
+for dir in "$RAW_DIR"/*/; do
+    [ -d "$dir" ] || continue
+    found_any=true
+    SUB_FOLDER=$(basename "$dir")
+    SEARCH_PATH="$RAW_DIR/$SUB_FOLDER"
+
+    echo "Processing folder: $SUB_FOLDER"
+
+    # Use nullglob so the loop is skipped if no .vasp files exist
+    shopt -s nullglob
+    vasp_files=("$SEARCH_PATH"/*.vasp)
+    shopt -u nullglob
+
+    if [ ${#vasp_files[@]} -eq 0 ]; then
+        echo "  No .vasp files found in $SEARCH_PATH, skipping..."
         continue
     fi
 
-    # Extract the sub-folder name from the full path
-    SUB_FOLDER=$(basename "$SEARCH_PATH")
+    for vasp_file in "${vasp_files[@]}"; do
+        # Create unique folder name for each structure
+        FILE_NAME=$(basename "$vasp_file" .vasp)
+        JOB_DIR="$CALC_DIR/${SUB_FOLDER}_${FILE_NAME}"
 
-    echo "========================================"
-    echo "Processing folder: $SUB_FOLDER"
-    echo "========================================"
-    
-    # Check if there are any .vasp files inside before processing
-    # This avoids throwing errors if a sub-folder is empty
-    if [ -n "$(find "$SEARCH_PATH" -maxdepth 1 -name "*.vasp" -print -quit)" ]; then
-        
-        for vasp_file in "$SEARCH_PATH"/*.vasp; do
-            # Create unique folder name for each structure
-            FILE_NAME=$(basename "$vasp_file" .vasp)
-            JOB_DIR="$CALC_DIR/${SUB_FOLDER}_${FILE_NAME}"
-            
-            mkdir -p "$JOB_DIR"
-            
-            # Copy VASP templates
-            cp "$TEMPLATE_DIR/INCAR" "$JOB_DIR/"
-            cp "$TEMPLATE_DIR/KPOINTS" "$JOB_DIR/"
-            cp "$TEMPLATE_DIR/POTCAR" "$JOB_DIR/"
-            
-            # Copy geometry file as POSCAR
-            cp "$vasp_file" "$JOB_DIR/POSCAR"
-            
-            # Copy and submit the SLURM script
-            cp "$RUN_SCRIPT" "$JOB_DIR/"
-            
-            cd "$JOB_DIR" || continue
-            sbatch run.sh
-            cd "$BASE_DIR" || exit
-            
-            echo "Submitted job for: ${SUB_FOLDER}_${FILE_NAME}"
-        done
-    else
-        echo "No .vasp files found in $SUB_FOLDER, skipping..."
-    fi
+        mkdir -p "$JOB_DIR"
+
+        # Copy VASP templates
+        cp "$TEMPLATE_DIR/INCAR" "$JOB_DIR/"
+        cp "$TEMPLATE_DIR/KPOINTS" "$JOB_DIR/"
+        cp "$TEMPLATE_DIR/POTCAR" "$JOB_DIR/"
+
+        # Copy geometry file as POSCAR
+        cp "$vasp_file" "$JOB_DIR/POSCAR"
+
+        # Copy and submit the SLURM script
+        cp "$RUN_SCRIPT" "$JOB_DIR/"
+
+        cd "$JOB_DIR"
+        sbatch run.sh
+        cd "$BASE_DIR"
+
+        echo "Submitted job for: $FILE_NAME"
+    done
 done
+
+if [ "$found_any" = false ]; then
+    echo "Warning: no sub-folders found inside '$RAW_DIR'."
+fi
 
 echo "All jobs have been dispatched to the queue."
